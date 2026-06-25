@@ -37,7 +37,7 @@ const mockRequest = {
     m5: 55,
     temp: 24.5,
     hum: 40.2,
-    waterLevel: 12.5
+    waterLevel: 30
   }
 };
 
