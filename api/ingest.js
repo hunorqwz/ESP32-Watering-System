@@ -21,10 +21,10 @@ export default async function handler(request, response) {
   }
 
   // Extract payload from request body (parsing if it is sent as a raw string)
-  let payload = request.body;
-  if (typeof payload === 'string') {
+  let rawBody = request.body;
+  if (typeof rawBody === 'string') {
     try {
-      payload = JSON.parse(payload);
+      rawBody = JSON.parse(rawBody);
     } catch (e) {
       return response.status(400).json({
         success: false,
@@ -33,7 +33,24 @@ export default async function handler(request, response) {
     }
   }
 
-  const { deviceId, m1, m2, m3, m4, m5, temp, hum, waterLevel } = payload || {};
+  // Extract from rawBody or EMQX nested payload wrapper
+  let extractedPayload = rawBody;
+  if (rawBody && rawBody.payload !== undefined) {
+    let innerPayload = rawBody.payload;
+    if (typeof innerPayload === 'string') {
+      try {
+        innerPayload = JSON.parse(innerPayload);
+      } catch (e) {
+        // Keep as string if parsing fails
+      }
+    }
+    // Only use inner payload if it contains the telemetry keys (like deviceId)
+    if (innerPayload && typeof innerPayload === 'object' && innerPayload.deviceId !== undefined) {
+      extractedPayload = innerPayload;
+    }
+  }
+
+  const { deviceId, m1, m2, m3, m4, m5, temp, hum, waterLevel } = extractedPayload || {};
 
   // Validate required telemetry fields
   if (
