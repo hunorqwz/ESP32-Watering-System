@@ -1,0 +1,13 @@
+{
+  "name": "esp32-watering-backend",
+  "version": "1.0.0",
+  "description": "EMQX MQTT to NeonDB backend webhook data bridge",
+  "type": "module",
+  "main": "api/ingest.js",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.1.0"
+  }
+}
