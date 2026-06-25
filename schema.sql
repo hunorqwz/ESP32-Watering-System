@@ -14,3 +14,17 @@ CREATE TABLE IF NOT EXISTS sensor_logs (
 
 -- Index for fast queries ordered by latest telemetry data
 CREATE INDEX IF NOT EXISTS idx_sensor_logs_device_created ON sensor_logs (device_id, created_at DESC);
+
+-- Table for historical tracking of issued control commands
+CREATE TABLE IF NOT EXISTS command_logs (
+    id SERIAL PRIMARY KEY,
+    pump INT NOT NULL CHECK (pump BETWEEN 1 AND 4),
+    state INT NOT NULL CHECK (state IN (0, 1)),
+    status VARCHAR(20) NOT NULL,     -- 'success' or 'failed'
+    response_msg_id VARCHAR(100),    -- EMQX message ID on success
+    error_details TEXT,              -- Detailed error if publish failed
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Index for fast queries sorted by execution time
+CREATE INDEX IF NOT EXISTS idx_command_logs_created ON command_logs (created_at DESC);

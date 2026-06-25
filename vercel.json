@@ -4,6 +4,10 @@
     {
       "source": "/api/ingest",
       "destination": "/api/ingest.js"
+    },
+    {
+      "source": "/api/command",
+      "destination": "/api/command.js"
     }
   ]
 }

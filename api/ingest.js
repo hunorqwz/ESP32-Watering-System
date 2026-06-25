@@ -50,13 +50,19 @@ export default async function handler(request, response) {
     });
   }
 
-  // Validate that required fields are valid numbers
+  // Parse and validate required numeric telemetry fields
+  const numM1 = Number(m1);
+  const numM2 = Number(m2);
+  const numM3 = Number(m3);
+  const numM4 = Number(m4);
+  const numM5 = Number(m5);
+
   if (
-    isNaN(Number(m1)) ||
-    isNaN(Number(m2)) ||
-    isNaN(Number(m3)) ||
-    isNaN(Number(m4)) ||
-    isNaN(Number(m5))
+    isNaN(numM1) ||
+    isNaN(numM2) ||
+    isNaN(numM3) ||
+    isNaN(numM4) ||
+    isNaN(numM5)
   ) {
     return response.status(400).json({
       success: false,
@@ -64,7 +70,7 @@ export default async function handler(request, response) {
     });
   }
 
-  // Validate optional numeric fields
+  // Parse and validate optional numeric fields
   const numTemp = temp !== undefined && temp !== null ? Number(temp) : null;
   const numHum = hum !== undefined && hum !== null ? Number(hum) : null;
   const numWaterLevel = waterLevel !== undefined && waterLevel !== null ? Number(waterLevel) : null;
@@ -98,11 +104,11 @@ export default async function handler(request, response) {
         water_level
       ) VALUES (
         ${deviceId}, 
-        ${Number(m1)}, 
-        ${Number(m2)}, 
-        ${Number(m3)}, 
-        ${Number(m4)}, 
-        ${Number(m5)}, 
+        ${numM1}, 
+        ${numM2}, 
+        ${numM3}, 
+        ${numM4}, 
+        ${numM5}, 
         ${numTemp}, 
         ${numHum}, 
         ${numWaterLevel}
