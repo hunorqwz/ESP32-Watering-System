@@ -40,3 +40,29 @@ CREATE TABLE IF NOT EXISTS system_config (
 INSERT INTO system_config (key, value)
 VALUES ('telemetry_interval_minutes', '15')
 ON CONFLICT (key) DO NOTHING;
+
+-- Seed default soil moisture calibration values (1100 for Wet, 3400 for Dry)
+INSERT INTO system_config (key, value)
+VALUES 
+    ('sensor_m1_dry', '3400'),
+    ('sensor_m1_wet', '1100'),
+    ('sensor_m2_dry', '3400'),
+    ('sensor_m2_wet', '1100'),
+    ('sensor_m3_dry', '3400'),
+    ('sensor_m3_wet', '1100'),
+    ('sensor_m4_dry', '3400'),
+    ('sensor_m4_wet', '1100'),
+    ('sensor_m5_dry', '3400'),
+    ('sensor_m5_wet', '1100')
+ON CONFLICT (key) DO NOTHING;
+
+-- Seed default reservoir calibration values (empty = 100cm, full = 10cm, capacity = 100L, dimensions = 60x70)
+INSERT INTO system_config (key, value)
+VALUES 
+    ('reservoir_empty_distance_cm', '100'),
+    ('reservoir_full_distance_cm', '0'),
+    ('reservoir_use_dimensions', 'false'),
+    ('reservoir_total_volume_liters', '100'),
+    ('reservoir_width_cm', '60'),
+    ('reservoir_length_cm', '70')
+ON CONFLICT (key) DO NOTHING;

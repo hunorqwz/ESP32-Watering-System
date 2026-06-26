@@ -5,37 +5,46 @@ export async function GET() {
   try {
     const sql = getDb();
 
-    // 1. Fetch the latest telemetry log
-    const latestLogs = await sql`
-      SELECT * FROM sensor_logs 
-      ORDER BY created_at DESC 
-      LIMIT 1
-    `;
-    const currentStatus = latestLogs.length > 0 ? latestLogs[0] : null;
-
-    // 2. Fetch the last 20 logs for historical charts (ordered chronologically for rendering)
-    const historicalLogs = await sql`
-      SELECT * FROM (
+    // Fetch all dashboard datasets concurrently to minimize response latency
+    const [latestLogs, historicalLogs, commands, configs] = await Promise.all([
+      // 1. Fetch the latest telemetry log
+      sql`
         SELECT * FROM sensor_logs 
         ORDER BY created_at DESC 
-        LIMIT 20
-      ) sub
-      ORDER BY created_at ASC
-    `;
+        LIMIT 1
+      `,
+      // 2. Fetch the last 20 logs for historical charts (ordered chronologically for rendering)
+      sql`
+        SELECT * FROM (
+          SELECT * FROM sensor_logs 
+          ORDER BY created_at DESC 
+          LIMIT 20
+        ) sub
+        ORDER BY created_at ASC
+      `,
+      // 3. Fetch the last 10 control command executions
+      sql`
+        SELECT * FROM command_logs 
+        ORDER BY created_at DESC 
+        LIMIT 10
+      `,
+      // 4. Fetch all configuration settings
+      sql`
+        SELECT key, value FROM system_config
+      `
+    ]);
 
-    // 3. Fetch the last 10 control command executions
-    const commands = await sql`
-      SELECT * FROM command_logs 
-      ORDER BY created_at DESC 
-      LIMIT 10
-    `;
-
-    // 4. Fetch the telemetry configuration and compute device connectivity status
-    const configs = await sql`
-      SELECT value FROM system_config 
-      WHERE key = 'telemetry_interval_minutes'
-    `;
-    const intervalMinutes = configs.length > 0 ? parseInt(configs[0].value, 10) : 15;
+    const currentStatus = latestLogs.length > 0 ? latestLogs[0] : null;
+    
+    // Map configurations array to key-value object
+    const configMap = {};
+    configs.forEach(cfg => {
+      configMap[cfg.key] = cfg.value;
+    });
+    
+    const intervalMinutes = configMap['telemetry_interval_minutes'] 
+      ? parseInt(configMap['telemetry_interval_minutes'], 10) 
+      : 15;
     
     let deviceStatus = {
       active: false,
@@ -60,7 +69,8 @@ export async function GET() {
       current: currentStatus,
       history: historicalLogs,
       commands: commands,
-      device_status: deviceStatus
+      device_status: deviceStatus,
+      configs: configMap
     });
   } catch (error) {
     console.error('Failed to load dashboard data:', error);
