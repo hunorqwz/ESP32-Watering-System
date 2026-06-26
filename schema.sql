@@ -28,3 +28,15 @@ CREATE TABLE IF NOT EXISTS command_logs (
 
 -- Index for fast queries sorted by execution time
 CREATE INDEX IF NOT EXISTS idx_command_logs_created ON command_logs (created_at DESC);
+
+-- Table for system configuration settings (shared between ESP32 and dashboard)
+CREATE TABLE IF NOT EXISTS system_config (
+    key VARCHAR(50) PRIMARY KEY,
+    value VARCHAR(255) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Seed default telemetry update interval (15 minutes)
+INSERT INTO system_config (key, value)
+VALUES ('telemetry_interval_minutes', '15')
+ON CONFLICT (key) DO NOTHING;

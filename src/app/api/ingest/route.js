@@ -1,36 +1,26 @@
-import { neon } from '@neondatabase/serverless';
+import { NextResponse } from 'next/server';
+import { getDb } from '@/lib/db';
 
-export default async function handler(request, response) {
-  // Ensure we only process POST requests
-  if (request.method !== 'POST') {
-    response.setHeader('Allow', ['POST']);
-    return response.status(405).json({
-      success: false,
-      error: `Method ${request.method} Not Allowed. Use POST.`
-    });
-  }
-
+export async function POST(request) {
   // Check if DATABASE_URL is available
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.error('DATABASE_URL environment variable is missing.');
-    return response.status(500).json({
-      success: false,
-      error: 'Database connection configuration is missing on the server.'
-    });
+    return NextResponse.json(
+      { success: false, error: 'Database connection configuration is missing on the server.' },
+      { status: 500 }
+    );
   }
 
-  // Extract payload from request body (parsing if it is sent as a raw string)
-  let payload = request.body;
-  if (typeof payload === 'string') {
-    try {
-      payload = JSON.parse(payload);
-    } catch (e) {
-      return response.status(400).json({
-        success: false,
-        error: 'Invalid JSON payload.'
-      });
-    }
+  // Extract payload from request body
+  let payload;
+  try {
+    payload = await request.json();
+  } catch (e) {
+    return NextResponse.json(
+      { success: false, error: 'Invalid JSON payload.' },
+      { status: 400 }
+    );
   }
 
   const { deviceId, m1, m2, m3, m4, m5, temp, hum, waterLevel } = payload || {};
@@ -44,10 +34,10 @@ export default async function handler(request, response) {
     m4 === undefined ||
     m5 === undefined
   ) {
-    return response.status(400).json({
-      success: false,
-      error: 'Missing required fields. deviceId, m1, m2, m3, m4, and m5 are mandatory.'
-    });
+    return NextResponse.json(
+      { success: false, error: 'Missing required fields. deviceId, m1, m2, m3, m4, and m5 are mandatory.' },
+      { status: 400 }
+    );
   }
 
   // Parse and validate required numeric telemetry fields
@@ -64,10 +54,10 @@ export default async function handler(request, response) {
     isNaN(numM4) ||
     isNaN(numM5)
   ) {
-    return response.status(400).json({
-      success: false,
-      error: 'Telemetry values m1, m2, m3, m4, and m5 must be valid numbers.'
-    });
+    return NextResponse.json(
+      { success: false, error: 'Telemetry values m1, m2, m3, m4, and m5 must be valid numbers.' },
+      { status: 400 }
+    );
   }
 
   // Parse and validate optional numeric fields
@@ -80,15 +70,15 @@ export default async function handler(request, response) {
     (numHum !== null && isNaN(numHum)) ||
     (numWaterLevel !== null && isNaN(numWaterLevel))
   ) {
-    return response.status(400).json({
-      success: false,
-      error: 'Optional telemetry values (temp, hum, waterLevel) must be valid numbers if provided.'
-    });
+    return NextResponse.json(
+      { success: false, error: 'Optional telemetry values (temp, hum, waterLevel) must be valid numbers if provided.' },
+      { status: 400 }
+    );
   }
 
   try {
-    // Initialize the Neon SQL client
-    const sql = neon(databaseUrl);
+    // Get database client
+    const sql = getDb();
 
     // Insert the sensor telemetry data into NeonDB
     await sql`
@@ -115,16 +105,26 @@ export default async function handler(request, response) {
       )
     `;
 
-    return response.status(201).json({
-      success: true,
-      message: 'Telemetry data successfully recorded.'
-    });
+    // Fetch current telemetry configuration to return on-wake
+    const configs = await sql`
+      SELECT value FROM system_config 
+      WHERE key = 'telemetry_interval_minutes'
+    `;
+    const intervalMinutes = configs.length > 0 ? parseInt(configs[0].value, 10) : 15;
+
+    return NextResponse.json(
+      { 
+        success: true, 
+        message: 'Telemetry data successfully recorded.',
+        telemetry_interval_minutes: intervalMinutes
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error('Database insertion error:', error);
-    return response.status(500).json({
-      success: false,
-      error: 'Failed to write telemetry data to the database.',
-      details: error.message
-    });
+    return NextResponse.json(
+      { success: false, error: 'Failed to write telemetry data to the database.', details: error.message },
+      { status: 500 }
+    );
   }
 }

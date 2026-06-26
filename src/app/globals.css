@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+:root {
+  --background: #fafafa; /* bg-zinc-50 */
+  --foreground: #09090b; /* text-zinc-950 */
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
