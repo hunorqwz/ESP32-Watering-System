@@ -5,57 +5,82 @@ export async function GET() {
   try {
     const sql = getDb();
 
-    // Fetch all dashboard datasets concurrently to minimize response latency
-    const [latestLogs, historicalLogs, commands, configs] = await Promise.all([
-      // 1. Fetch the latest telemetry log
+    // Fetch all metadata configs, latest values, commands, and system configs concurrently
+    const [sensors, pumps, latestReadings, recentReadings, commands, configs] = await Promise.all([
+      // 1. Fetch sensor configurations
       sql`
-        SELECT * FROM sensor_logs 
-        ORDER BY created_at DESC 
-        LIMIT 1
+        SELECT * FROM sensor_configs 
+        ORDER BY id ASC
       `,
-      // 2. Fetch the last 20 logs for historical charts (ordered chronologically for rendering)
+      // 2. Fetch pump configurations
+      sql`
+        SELECT * FROM pump_configs 
+        ORDER BY id ASC
+      `,
+      // 3. Fetch the single latest reading for each sensor config
+      sql`
+        SELECT DISTINCT ON (sensor_config_id) 
+          sensor_config_id, value, created_at 
+        FROM sensor_readings 
+        ORDER BY sensor_config_id, created_at DESC
+      `,
+      // 4. Fetch the last 150 readings for historical charts
       sql`
         SELECT * FROM (
-          SELECT * FROM sensor_logs 
+          SELECT * FROM sensor_readings 
           ORDER BY created_at DESC 
-          LIMIT 20
+          LIMIT 150
         ) sub
         ORDER BY created_at ASC
       `,
-      // 3. Fetch the last 10 control command executions
+      // 5. Fetch the last 10 control command executions
       sql`
         SELECT * FROM command_logs 
         ORDER BY created_at DESC 
         LIMIT 10
       `,
-      // 4. Fetch all configuration settings
+      // 6. Fetch all system configurations
       sql`
         SELECT key, value FROM system_config
       `
     ]);
 
-    const currentStatus = latestLogs.length > 0 ? latestLogs[0] : null;
-    
-    // Map configurations array to key-value object
+    // Map system configs into key-value map
     const configMap = {};
     configs.forEach(cfg => {
       configMap[cfg.key] = cfg.value;
     });
-    
+
     const intervalMinutes = configMap['telemetry_interval_minutes'] 
       ? parseInt(configMap['telemetry_interval_minutes'], 10) 
       : 15;
-    
+
+    // Map latest reading values by sensor ID for easy access
+    const latestReadingsMap = {};
+    let latestReportTime = null;
+
+    latestReadings.forEach(r => {
+      latestReadingsMap[r.sensor_config_id] = {
+        value: r.value,
+        created_at: r.created_at
+      };
+
+      const readingTime = new Date(r.created_at).getTime();
+      if (!latestReportTime || readingTime > latestReportTime) {
+        latestReportTime = readingTime;
+      }
+    });
+
+    // Calculate device active status
     let deviceStatus = {
       active: false,
       last_seen_seconds: null,
       interval_minutes: intervalMinutes
     };
 
-    if (currentStatus) {
-      const lastLogTime = new Date(currentStatus.created_at).getTime();
-      const elapsedSeconds = Math.max(0, Math.floor((Date.now() - lastLogTime) / 1000));
-      const thresholdSeconds = (intervalMinutes + 2) * 60; // 15m interval + 2m buffer
+    if (latestReportTime) {
+      const elapsedSeconds = Math.max(0, Math.floor((Date.now() - latestReportTime) / 1000));
+      const thresholdSeconds = (intervalMinutes + 2) * 60; // interval + 2m buffer
       
       deviceStatus = {
         active: elapsedSeconds <= thresholdSeconds,
@@ -66,18 +91,21 @@ export async function GET() {
 
     return NextResponse.json({
       success: true,
-      current: currentStatus,
-      history: historicalLogs,
+      sensors: sensors,
+      pumps: pumps,
+      latest_readings: latestReadingsMap,
+      history_readings: recentReadings,
       commands: commands,
       device_status: deviceStatus,
       configs: configMap
     });
   } catch (error) {
-    console.error('Failed to load dashboard data:', error);
+    console.error('Failed to load dynamic dashboard datasets:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to retrieve data from database.', details: error.message },
+      { success: false, error: 'Failed to retrieve dashboard dataset from database.', details: error.message },
       { status: 500 }
     );
   }
 }
+
 export const dynamic = 'force-dynamic';

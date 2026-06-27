@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 
 export async function POST(request) {
-  // Check if DATABASE_URL is available
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.error('DATABASE_URL environment variable is missing.');
@@ -12,7 +11,6 @@ export async function POST(request) {
     );
   }
 
-  // Extract payload from request body
   let payload;
   try {
     payload = await request.json();
@@ -23,110 +21,102 @@ export async function POST(request) {
     );
   }
 
-  const { deviceId, m1, m2, m3, m4, m5, temp, hum, waterLevel } = payload || {};
+  const { deviceId, readings, m1, m2, m3, m4, m5, temp, hum, waterLevel } = payload || {};
 
-  // Validate required telemetry fields
-  if (
-    deviceId === undefined ||
-    m1 === undefined ||
-    m2 === undefined ||
-    m3 === undefined ||
-    m4 === undefined ||
-    m5 === undefined
-  ) {
+  if (!deviceId) {
     return NextResponse.json(
-      { success: false, error: 'Missing required fields. deviceId, m1, m2, m3, m4, and m5 are mandatory.' },
+      { success: false, error: 'Missing required field: "deviceId".' },
       { status: 400 }
     );
   }
 
-  // Parse and validate required numeric telemetry fields
-  const numM1 = Number(m1);
-  const numM2 = Number(m2);
-  const numM3 = Number(m3);
-  const numM4 = Number(m4);
-  const numM5 = Number(m5);
-
-  if (
-    isNaN(numM1) ||
-    isNaN(numM2) ||
-    isNaN(numM3) ||
-    isNaN(numM4) ||
-    isNaN(numM5)
-  ) {
-    return NextResponse.json(
-      { success: false, error: 'Telemetry values m1, m2, m3, m4, and m5 must be valid numbers.' },
-      { status: 400 }
-    );
-  }
-
-  // Parse and validate optional numeric fields
-  const numTemp = temp !== undefined && temp !== null ? Number(temp) : null;
-  const numHum = hum !== undefined && hum !== null ? Number(hum) : null;
-  const numWaterLevel = waterLevel !== undefined && waterLevel !== null ? Number(waterLevel) : null;
-
-  if (
-    (numTemp !== null && isNaN(numTemp)) ||
-    (numHum !== null && isNaN(numHum)) ||
-    (numWaterLevel !== null && isNaN(numWaterLevel))
-  ) {
-    return NextResponse.json(
-      { success: false, error: 'Optional telemetry values (temp, hum, waterLevel) must be valid numbers if provided.' },
-      { status: 400 }
-    );
-  }
+  const sql = getDb();
+  const timestamp = new Date().toISOString();
 
   try {
-    // Get database client
-    const sql = getDb();
+    let processedReadings = []; // Array of { sensor_config_id, value }
 
-    // Insert the sensor telemetry data into NeonDB
-    await sql`
-      INSERT INTO sensor_logs (
-        device_id, 
-        m1, 
-        m2, 
-        m3, 
-        m4, 
-        m5, 
-        temp, 
-        hum, 
-        water_level
-      ) VALUES (
-        ${deviceId}, 
-        ${numM1}, 
-        ${numM2}, 
-        ${numM3}, 
-        ${numM4}, 
-        ${numM5}, 
-        ${numTemp}, 
-        ${numHum}, 
-        ${numWaterLevel}
-      )
-    `;
+    // 1. Dynamic Relational Format Handler
+    if (Array.isArray(readings)) {
+      for (const item of readings) {
+        const sensorId = parseInt(item.sensorId, 10);
+        const value = parseFloat(item.value);
+        if (!isNaN(sensorId) && !isNaN(value)) {
+          processedReadings.push({ sensor_config_id: sensorId, value: value });
+        }
+      }
+    } 
+    // 2. Legacy Fallback Handler (If ESP32 sends the old format)
+    else if (m1 !== undefined || m2 !== undefined || m3 !== undefined || m4 !== undefined || m5 !== undefined) {
+      const legacyLogs = {
+        m1: Number(m1 || 0),
+        m2: Number(m2 || 0),
+        m3: Number(m3 || 0),
+        m4: Number(m4 || 0),
+        m5: Number(m5 || 0),
+        temp: temp !== undefined && temp !== null ? Number(temp) : null,
+        hum: hum !== undefined && hum !== null ? Number(hum) : null,
+        water_level: waterLevel !== undefined && waterLevel !== null ? Number(waterLevel) : null
+      };
 
-    // Fetch current telemetry configuration to return on-wake
+      // Write to legacy sensor_logs table to support legacy tools
+      await sql`
+        INSERT INTO sensor_logs (
+          device_id, m1, m2, m3, m4, m5, temp, hum, water_level
+        ) VALUES (
+          ${deviceId}, ${legacyLogs.m1}, ${legacyLogs.m2}, ${legacyLogs.m3}, ${legacyLogs.m4}, ${legacyLogs.m5}, ${legacyLogs.temp}, ${legacyLogs.hum}, ${legacyLogs.water_level}
+        )
+      `;
+
+      // Map to default seeded relational config IDs
+      // ID mappings: 1=Zone 1, 2=Zone 2, 3=Zone 3, 4=Zone 4, 5=Zone 5, 6=Temp, 7=Hum, 8=WaterLevel
+      processedReadings.push({ sensor_config_id: 1, value: legacyLogs.m1 });
+      processedReadings.push({ sensor_config_id: 2, value: legacyLogs.m2 });
+      processedReadings.push({ sensor_config_id: 3, value: legacyLogs.m3 });
+      processedReadings.push({ sensor_config_id: 4, value: legacyLogs.m4 });
+      processedReadings.push({ sensor_config_id: 5, value: legacyLogs.m5 });
+      if (legacyLogs.temp !== null) processedReadings.push({ sensor_config_id: 6, value: legacyLogs.temp });
+      if (legacyLogs.hum !== null) processedReadings.push({ sensor_config_id: 7, value: legacyLogs.hum });
+      if (legacyLogs.water_level !== null) processedReadings.push({ sensor_config_id: 8, value: legacyLogs.water_level });
+    } else {
+      return NextResponse.json(
+        { success: false, error: 'Request must contain either an array of "readings" or legacy sensor parameters.' },
+        { status: 400 }
+      );
+    }
+
+    // Insert all readings into the relational sensor_readings table
+    if (processedReadings.length > 0) {
+      await Promise.all(
+        processedReadings.map(reading => 
+          sql`
+            INSERT INTO sensor_readings (sensor_config_id, value, created_at)
+            VALUES (${reading.sensor_config_id}, ${reading.value}, ${timestamp})
+          `
+        )
+      );
+    }
+
+    // Fetch current telemetry configuration to return to ESP32
     const configs = await sql`
       SELECT value FROM system_config 
       WHERE key = 'telemetry_interval_minutes'
     `;
     const intervalMinutes = configs.length > 0 ? parseInt(configs[0].value, 10) : 15;
 
-    // Construct telemetry payload for real-time subscribers
+    // Build flat readings object for real-time WebSocket dashboard compatibility
+    const flatReadings = {};
+    processedReadings.forEach(r => {
+      flatReadings[r.sensor_config_id] = r.value;
+    });
+
     const telemetryPayload = {
       device_id: deviceId,
-      m1: numM1,
-      m2: numM2,
-      m3: numM3,
-      m4: numM4,
-      m5: numM5,
-      temp: numTemp,
-      hum: numHum,
-      water_level: numWaterLevel,
-      created_at: new Date().toISOString()
+      readings: flatReadings,
+      created_at: timestamp
     };
 
-    // Publish telemetry payload to EMQX broker asynchronously
+    // Publish telemetry payload to EMQX MQTT broker
     const apiUrl = process.env.EMQX_API_URL;
     const apiKey = process.env.EMQX_API_KEY;
     const apiSecret = process.env.EMQX_API_SECRET;
@@ -168,7 +158,7 @@ export async function POST(request) {
       { status: 201 }
     );
   } catch (error) {
-    console.error('Database insertion error:', error);
+    console.error('Telemetry ingest processing error:', error);
     return NextResponse.json(
       { success: false, error: 'Failed to write telemetry data to the database.', details: error.message },
       { status: 500 }

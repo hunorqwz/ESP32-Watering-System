@@ -2,10 +2,17 @@
 
 import { useState, useEffect } from 'react';
 import mqtt from 'mqtt';
-import { Cylinder, Thermometer, Droplets, Sprout, RefreshCw, Settings, X } from 'lucide-react';
+import { Cylinder, Thermometer, Droplets, Sprout, RefreshCw, Settings, X, Plus, Trash2, Edit2, Wifi } from 'lucide-react';
 
 export default function Dashboard() {
-  const [data, setData] = useState({ current: null });
+  const [data, setData] = useState({
+    sensors: [],
+    pumps: [],
+    latest_readings: {},
+    history_readings: [],
+    configs: {},
+    device_status: { active: false, last_seen_seconds: null, interval_minutes: 15 }
+  });
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(false);
   const [deviceStatus, setDeviceStatus] = useState({
@@ -15,25 +22,33 @@ export default function Dashboard() {
   });
   const [togglingConfig, setTogglingConfig] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [pumps, setPumps] = useState({
-    1: false,
-    2: false,
-    3: false,
-    4: false
-  });
-  const [togglingPumps, setTogglingPumps] = useState({
-    1: false,
-    2: false,
-    3: false,
-    4: false
-  });
-  const [configs, setConfigs] = useState({});
-  const [isCalibrateOpen, setIsCalibrateOpen] = useState(false);
-  const [tempConfigs, setTempConfigs] = useState({});
-  const [isReservoirOpen, setIsReservoirOpen] = useState(false);
+  const [pumpsState, setPumpsState] = useState({});
+  const [togglingPumps, setTogglingPumps] = useState({});
   const [lastReportTime, setLastReportTime] = useState(null);
+
+  // Configuration Manager Modal States
+  const [isConfigOpen, setIsConfigOpen] = useState(false);
+  const [configTab, setConfigTab] = useState('network'); // 'network', 'sensors', 'pumps', 'general'
+
+  // Forms
+  const [wifiSsid, setWifiSsid] = useState('');
+  const [wifiPassword, setWifiPassword] = useState('');
   const [customInterval, setCustomInterval] = useState(15);
   const [intervalUnit, setIntervalUnit] = useState('minutes');
+
+  // Sensor Form
+  const [editingSensorId, setEditingSensorId] = useState(null);
+  const [sensorName, setSensorName] = useState('');
+  const [sensorType, setSensorType] = useState('moisture');
+  const [sensorPin, setSensorPin] = useState(32);
+  const [sensorGroup, setSensorGroup] = useState('Soil Moisture');
+  const [sensorDryLimit, setSensorDryLimit] = useState(3400);
+  const [sensorWetLimit, setSensorWetLimit] = useState(1100);
+
+  // Pump Form
+  const [editingPumpId, setEditingPumpId] = useState(null);
+  const [pumpName, setPumpName] = useState('');
+  const [pumpPin, setPumpPin] = useState(25);
 
   const fetchDashboardData = async () => {
     try {
@@ -41,30 +56,34 @@ export default function Dashboard() {
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
-          setData({ current: json.current });
+          setData(json);
           setConnected(true);
           
-          if (json.current && json.current.created_at) {
-            setLastReportTime(new Date(json.current.created_at).getTime());
-          }
           if (json.device_status) {
             setDeviceStatus(json.device_status);
           }
           if (json.configs) {
-            setConfigs(json.configs);
+            setWifiSsid(json.configs['wifi_ssid'] || '');
+            setWifiPassword(json.configs['wifi_password'] || '');
           }
-          
-          // Sync state from active command log logs if successful
-          if (json.commands && json.commands.length > 0) {
-            const pumpState = { 1: false, 2: false, 3: false, 4: false };
-            const seen = new Set();
-            for (const cmd of json.commands) {
-              if (cmd.status === 'success' && !seen.has(cmd.pump)) {
-                pumpState[cmd.pump] = cmd.state === 1;
-                seen.add(cmd.pump);
-              }
-            }
-            setPumps(pumpState);
+
+          // Sync last report time from latest reading timestamps
+          if (json.latest_readings) {
+            let maxTime = null;
+            Object.values(json.latest_readings).forEach(r => {
+              const t = new Date(r.created_at).getTime();
+              if (!maxTime || t > maxTime) maxTime = t;
+            });
+            if (maxTime) setLastReportTime(maxTime);
+          }
+
+          // Sync pump states
+          if (json.pumps) {
+            const states = {};
+            json.pumps.forEach(p => {
+              states[p.id] = p.state === 1;
+            });
+            setPumpsState(states);
           }
         } else {
           setConnected(false);
@@ -80,6 +99,7 @@ export default function Dashboard() {
     }
   };
 
+  // HTTP Polling with Visibility API
   useEffect(() => {
     fetchDashboardData();
 
@@ -109,8 +129,6 @@ export default function Dashboard() {
     document.addEventListener('visibilitychange', handleVisibilityChange);
     startPolling();
 
-    // Register service worker for PWA support only in production.
-    // In development, actively unregister any service workers to prevent cache lockups.
     if ('serviceWorker' in navigator) {
       if (process.env.NODE_ENV === 'production') {
         navigator.serviceWorker.register('/sw.js').catch((err) =>
@@ -133,6 +151,7 @@ export default function Dashboard() {
     };
   }, []);
 
+  // WebSockets Real-Time Push connection
   useEffect(() => {
     const brokerUrl = 'wss://bcc1fdaf.ala.eu-central-1.emqxsl.com:8084/mqtt';
     const username = process.env.NEXT_PUBLIC_EMQX_MQTT_USER;
@@ -147,7 +166,7 @@ export default function Dashboard() {
     const client = mqtt.connect(brokerUrl, {
       username: username,
       password: password,
-      clientId: 'web_dashboard_' + Math.random().toString(16).substr(2, 8),
+      clientId: 'web_dashboard_' + Math.random().toString(16).slice(2, 10),
       clean: true,
       connectTimeout: 5000,
       reconnectPeriod: 10000
@@ -169,17 +188,31 @@ export default function Dashboard() {
         console.log(`Received message on [${topic}]:`, payload);
 
         if (topic === 'device/telemetry') {
-          setData({ current: payload });
-          setLastReportTime(new Date(payload.created_at || Date.now()).getTime());
-          setDeviceStatus(prev => ({
-            ...prev,
-            last_seen_seconds: 0,
-            active: true
-          }));
+          // Relational format update
+          if (payload.readings) {
+            setData(prev => {
+              const updatedReadings = { ...prev.latest_readings };
+              Object.keys(payload.readings).forEach(sensorId => {
+                updatedReadings[sensorId] = {
+                  value: payload.readings[sensorId],
+                  created_at: payload.created_at
+                };
+              });
+              return { ...prev, latest_readings: updatedReadings };
+            });
+
+            const t = new Date(payload.created_at).getTime();
+            setLastReportTime(t);
+            setDeviceStatus(prev => ({
+              ...prev,
+              last_seen_seconds: 0,
+              active: true
+            }));
+          }
         } else if (topic === 'device/commands') {
           const { pump, state } = payload;
           if (pump !== undefined && state !== undefined) {
-            setPumps(prev => ({
+            setPumpsState(prev => ({
               ...prev,
               [pump]: state === 1
             }));
@@ -200,25 +233,7 @@ export default function Dashboard() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!lastReportTime) return;
-
-    const updateElapsed = () => {
-      const elapsed = Math.max(0, Math.floor((Date.now() - lastReportTime) / 1000));
-      const thresholdSeconds = (deviceStatus.interval_minutes + 2) * 60;
-
-      setDeviceStatus(prev => ({
-        ...prev,
-        last_seen_seconds: elapsed,
-        active: elapsed <= thresholdSeconds
-      }));
-    };
-
-    updateElapsed();
-    const timer = setInterval(updateElapsed, 1000);
-    return () => clearInterval(timer);
-  }, [lastReportTime, deviceStatus.interval_minutes]);
-
+  // Sync intervals
   useEffect(() => {
     const totalMinutes = deviceStatus.interval_minutes || 15;
     if (totalMinutes % 60 === 0) {
@@ -230,86 +245,21 @@ export default function Dashboard() {
     }
   }, [deviceStatus.interval_minutes]);
 
-  const handlePumpToggle = async (pumpId) => {
-    if (togglingPumps[pumpId]) return;
-    
-    const nextState = !pumps[pumpId];
-    
-    // Set toggling state
-    setTogglingPumps(prev => ({ ...prev, [pumpId]: true }));
-    
-    try {
-      const res = await fetch('/api/command', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          pump: parseInt(pumpId),
-          state: nextState ? 1 : 0
-        })
-      });
-      
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success) {
-          setPumps(prev => ({ ...prev, [pumpId]: nextState }));
-        } else {
-          console.error('Command rejected:', json.error);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to send command:', err);
-    } finally {
-      setTogglingPumps(prev => ({ ...prev, [pumpId]: false }));
-    }
-  };
-
-  const handleCustomIntervalSave = async () => {
-    if (togglingConfig) return;
-    
-    let totalMinutes = parseInt(customInterval, 10);
-    if (isNaN(totalMinutes) || totalMinutes <= 0) return;
-    
-    if (intervalUnit === 'hours') {
-      totalMinutes = totalMinutes * 60;
-    }
-    
-    setTogglingConfig(true);
-    try {
-      const res = await fetch('/api/config', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          key: 'telemetry_interval_minutes',
-          value: String(totalMinutes)
-        })
-      });
-      
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success) {
-          setDeviceStatus(prev => ({ 
-            ...prev, 
-            interval_minutes: totalMinutes 
-          }));
-          await fetchDashboardData();
-        }
-      }
-    } catch (err) {
-      console.error('Failed to update custom telemetry interval:', err);
-    } finally {
-      setTogglingConfig(false);
-    }
+  const getMaxTimestamp = (readings) => {
+    if (!readings) return null;
+    let maxT = null;
+    Object.values(readings).forEach(r => {
+      const t = new Date(r.created_at).getTime();
+      if (!maxT || t > maxT) maxT = t;
+    });
+    return maxT;
   };
 
   const handleRefresh = async () => {
     if (refreshing) return;
     
     setRefreshing(true);
-    const lastTimestamp = data.current?.created_at;
+    const lastMaxTime = getMaxTimestamp(data.latest_readings);
     
     try {
       const res = await fetch('/api/refresh', {
@@ -326,12 +276,9 @@ export default function Dashboard() {
               if (dashRes.ok) {
                 const dashJson = await dashRes.json();
                 if (dashJson.success) {
-                  const newTimestamp = dashJson.current?.created_at;
-                  if (newTimestamp !== lastTimestamp) {
-                    setData({ current: dashJson.current });
-                    if (dashJson.device_status) {
-                      setDeviceStatus(dashJson.device_status);
-                    }
+                  const newMaxTime = getMaxTimestamp(dashJson.latest_readings);
+                  if (newMaxTime !== lastMaxTime) {
+                    setData(dashJson);
                     clearInterval(pollInterval);
                     setRefreshing(false);
                     return;
@@ -361,96 +308,236 @@ export default function Dashboard() {
     }
   };
 
-  const handleConfigSave = async (key, val) => {
+  const handlePumpToggle = async (pumpId, currentPin) => {
+    if (togglingPumps[pumpId]) return;
+    
+    const nextState = !pumpsState[pumpId];
+    setTogglingPumps(prev => ({ ...prev, [pumpId]: true }));
+    
     try {
-      const res = await fetch('/api/config', {
+      const res = await fetch('/api/command', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ key, value: String(val) })
+        body: JSON.stringify({
+          pump: parseInt(pumpId, 10),
+          state: nextState ? 1 : 0
+        })
+      });
+      
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          setPumpsState(prev => ({ ...prev, [pumpId]: nextState }));
+        }
+      }
+    } catch (err) {
+      console.error('Failed to send command:', err);
+    } finally {
+      setTogglingPumps(prev => ({ ...prev, [pumpId]: false }));
+    }
+  };
+
+  // WiFi Settings Save
+  const handleWifiSave = async () => {
+    setTogglingConfig(true);
+    try {
+      await Promise.all([
+        fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: 'wifi_ssid', value: wifiSsid })
+        }),
+        fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: 'wifi_password', value: wifiPassword })
+        })
+      ]);
+      await fetchDashboardData();
+    } catch (err) {
+      console.error('Failed to save WiFi settings:', err);
+    } finally {
+      setTogglingConfig(false);
+    }
+  };
+
+  // Telemetry Interval Save
+  const handleCustomIntervalSave = async () => {
+    if (togglingConfig) return;
+    
+    let totalMinutes = parseInt(customInterval, 10);
+    if (isNaN(totalMinutes) || totalMinutes <= 0) return;
+    
+    if (intervalUnit === 'hours') {
+      totalMinutes = totalMinutes * 60;
+    }
+    
+    setTogglingConfig(true);
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'telemetry_interval_minutes', value: String(totalMinutes) })
+      });
+      
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          setDeviceStatus(prev => ({ ...prev, interval_minutes: totalMinutes }));
+          await fetchDashboardData();
+        }
+      }
+    } catch (err) {
+      console.error('Failed to save telemetry rate:', err);
+    } finally {
+      setTogglingConfig(false);
+    }
+  };
+
+  // Sensor Add/Edit Save
+  const handleSensorSave = async () => {
+    if (!sensorName || !sensorType || sensorPin === undefined) return;
+    
+    try {
+      const res = await fetch('/api/sensor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: editingSensorId,
+          name: sensorName,
+          type: sensorType,
+          pin: parseInt(sensorPin, 10),
+          sensor_group: sensorGroup || 'General',
+          dry_limit: sensorType === 'moisture' || sensorType === 'water_level' ? parseInt(sensorDryLimit, 10) : null,
+          wet_limit: sensorType === 'moisture' || sensorType === 'water_level' ? parseInt(sensorWetLimit, 10) : null
+        })
       });
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
-          setConfigs(prev => ({ ...prev, [key]: String(val) }));
+          setEditingSensorId(null);
+          setSensorName('');
+          setSensorType('moisture');
+          setSensorPin(32);
+          setSensorGroup('Soil Moisture');
+          setSensorDryLimit(3400);
+          setSensorWetLimit(1100);
+          await fetchDashboardData();
         }
       }
     } catch (err) {
-      console.error('Failed to update config setting:', err);
+      console.error('Failed to save sensor:', err);
     }
   };
 
-  const handleConfigSaveAll = async () => {
+  const handleSensorDelete = async (sensorId) => {
+    if (!confirm('Are you sure you want to delete this sensor config? All its logging history will be removed.')) return;
     try {
-      const keysToSave = Object.keys(tempConfigs);
-      if (keysToSave.length > 0) {
-        await Promise.all(
-          keysToSave.map(key =>
-            fetch('/api/config', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({ key, value: String(tempConfigs[key]) })
-            })
-          )
-        );
-        setConfigs(prev => ({ ...prev, ...tempConfigs }));
+      const res = await fetch(`/api/sensor?id=${sensorId}`, { method: 'DELETE' });
+      if (res.ok) {
+        await fetchDashboardData();
       }
-      setIsCalibrateOpen(false);
-      setIsReservoirOpen(false);
-      setTempConfigs({});
     } catch (err) {
-      console.error('Failed to save all configurations:', err);
+      console.error('Failed to delete sensor:', err);
+    }
+  };
+
+  // Pump Add/Edit Save
+  const handlePumpSave = async () => {
+    if (!pumpName || pumpPin === undefined) return;
+    try {
+      const res = await fetch('/api/pump', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: editingPumpId,
+          name: pumpName,
+          pin: parseInt(pumpPin, 10)
+        })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          setEditingPumpId(null);
+          setPumpName('');
+          setPumpPin(25);
+          await fetchDashboardData();
+        }
+      }
+    } catch (err) {
+      console.error('Failed to save pump:', err);
+    }
+  };
+
+  const handlePumpDelete = async (pumpId) => {
+    if (!confirm('Are you sure you want to delete this pump configuration?')) return;
+    try {
+      const res = await fetch(`/api/pump?id=${pumpId}`, { method: 'DELETE' });
+      if (res.ok) {
+        await fetchDashboardData();
+      }
+    } catch (err) {
+      console.error('Failed to delete pump:', err);
+    }
+  };
+
+  const renderLastSeenText = () => {
+    const elapsed = deviceStatus.last_seen_seconds;
+    if (elapsed === null) return 'Never seen';
+    if (elapsed < 60) return 'Just now';
+    if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ago`;
+    return `${Math.floor(elapsed / 3600)}h ago`;
+  };
+
+  const mapMoistureToPercentage = (rawValue, dryLimit, wetLimit) => {
+    if (rawValue === undefined || rawValue === null) return 0;
+    const dry = dryLimit !== undefined && dryLimit !== null ? dryLimit : 3400;
+    const wet = wetLimit !== undefined && wetLimit !== null ? wetLimit : 1100;
+    if (dry === wet) return 0;
+    
+    if (dry > wet) {
+      if (rawValue >= dry) return 0;
+      if (rawValue <= wet) return 100;
+      return Math.round(((dry - rawValue) / (dry - wet)) * 100);
+    } else {
+      if (rawValue <= dry) return 0;
+      if (rawValue >= wet) return 100;
+      return Math.round(((rawValue - dry) / (wet - dry)) * 100);
     }
   };
 
   const getReservoirStats = (rawDistance) => {
-    if (rawDistance === undefined || rawDistance === null) {
-      return { percentage: 0, liters: 0, height: 0, capacity: 100 };
-    }
+    const waterSensor = data.sensors?.find(s => s.type === 'water_level');
+    const emptyDist = waterSensor?.dry_limit || 100;
+    const fullDist = waterSensor?.wet_limit || 0;
+    const useDimensions = data.configs['reservoir_use_dimensions'] === 'true';
+    const totalVolume = data.configs['reservoir_total_volume_liters'] ? parseFloat(data.configs['reservoir_total_volume_liters']) : 100;
+    const width = data.configs['reservoir_width_cm'] ? parseFloat(data.configs['reservoir_width_cm']) : 60;
+    const length = data.configs['reservoir_length_cm'] ? parseFloat(data.configs['reservoir_length_cm']) : 70;
 
-    const emptyDist = configs['reservoir_empty_distance_cm'] 
-      ? parseFloat(configs['reservoir_empty_distance_cm']) 
-      : 100;
-    const fullDist = configs['reservoir_full_distance_cm'] 
-      ? parseFloat(configs['reservoir_full_distance_cm']) 
-      : 0;
-    const useDimensions = configs['reservoir_use_dimensions'] === 'true';
-    const totalVolume = configs['reservoir_total_volume_liters'] 
-      ? parseFloat(configs['reservoir_total_volume_liters']) 
-      : 100;
-    const width = configs['reservoir_width_cm'] 
-      ? parseFloat(configs['reservoir_width_cm']) 
-      : 60;
-    const length = configs['reservoir_length_cm'] 
-      ? parseFloat(configs['reservoir_length_cm']) 
-      : 70;
+    if (rawDistance === undefined || rawDistance === null) {
+      return { percentage: 0, liters: 0, height: 0, capacity: totalVolume };
+    }
 
     let span = 0;
     let height = 0;
 
     if (emptyDist > fullDist) {
-      // Top-mounted distance sensor (reading decreases as water rises)
       span = emptyDist - fullDist;
       height = emptyDist - rawDistance;
     } else {
-      // Bottom-mounted height sensor or direct reading (reading increases as water rises)
       span = fullDist - emptyDist;
       height = rawDistance - emptyDist;
     }
 
-    if (span <= 0) {
-      return { percentage: 0, liters: 0, height: 0, capacity: totalVolume };
-    }
+    if (span <= 0) return { percentage: 0, liters: 0, height: 0, capacity: totalVolume };
 
     if (height < 0) height = 0;
     if (height > span) height = span;
 
-    // Percentage of water
     const percentage = Math.min(100, Math.max(0, Math.round((height / span) * 100)));
-
     let liters = 0;
     let capacity = totalVolume;
 
@@ -469,44 +556,6 @@ export default function Dashboard() {
     };
   };
 
-  const current = data.current;
-  const isStale = !connected || !deviceStatus.active;
-  const resStats = getReservoirStats(current?.water_level);
-
-  const renderLastSeenText = () => {
-    const elapsed = deviceStatus.last_seen_seconds;
-    if (elapsed === null) return 'Never seen';
-    if (elapsed < 60) return 'Just now';
-    if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ago`;
-    return `${Math.floor(elapsed / 3600)}h ago`;
-  };
-
-  const mapMoistureToPercentage = (rawValue, sensorKey) => {
-    if (rawValue === undefined || rawValue === null) return 0;
-    
-    // Fallback defaults: Dry = 3400 (Max), Wet = 1100 (Min)
-    const dryLimit = configs[`sensor_${sensorKey}_dry`] 
-      ? parseInt(configs[`sensor_${sensorKey}_dry`], 10) 
-      : 3400;
-    const wetLimit = configs[`sensor_${sensorKey}_wet`] 
-      ? parseInt(configs[`sensor_${sensorKey}_wet`], 10) 
-      : 1100;
-      
-    if (dryLimit === wetLimit) return 0;
-    
-    if (dryLimit > wetLimit) {
-      if (rawValue >= dryLimit) return 0;
-      if (rawValue <= wetLimit) return 100;
-      const percentage = ((dryLimit - rawValue) / (dryLimit - wetLimit)) * 100;
-      return Math.round(percentage);
-    } else {
-      if (rawValue <= dryLimit) return 0;
-      if (rawValue >= wetLimit) return 100;
-      const percentage = ((rawValue - dryLimit) / (wetLimit - dryLimit)) * 100;
-      return Math.round(percentage);
-    }
-  };
-
   const getMoistureStatus = (pct) => {
     if (pct < 30) return { label: 'Dry', color: 'text-red-500 font-semibold' };
     if (pct <= 70) return { label: 'Good', color: 'text-emerald-600 font-semibold' };
@@ -519,6 +568,19 @@ export default function Dashboard() {
     return 'bg-blue-500';
   };
 
+  const tempSensor = data.sensors?.find(s => s.type === 'temperature');
+  const tempReading = tempSensor ? data.latest_readings?.[tempSensor.id]?.value : null;
+
+  const humSensor = data.sensors?.find(s => s.type === 'humidity');
+  const humReading = humSensor ? data.latest_readings?.[humSensor.id]?.value : null;
+
+  const waterSensor = data.sensors?.find(s => s.type === 'water_level');
+  const waterReading = waterSensor ? data.latest_readings?.[waterSensor.id]?.value : null;
+  const resStats = getReservoirStats(waterReading);
+
+  const moistureSensors = data.sensors?.filter(s => s.type === 'moisture') || [];
+  const isStale = !connected || !deviceStatus.active;
+
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900 font-sans p-6 md:p-12">
       <div className="max-w-4xl mx-auto space-y-8">
@@ -527,29 +589,34 @@ export default function Dashboard() {
         <header className="flex justify-between items-center border-b border-zinc-200 pb-4">
           <div>
             <h1 className="text-xl font-semibold tracking-tight text-zinc-900">Terrace System</h1>
-            <p className="text-xs text-zinc-500">Live Telemetry & Irrigation Controls</p>
+            <p className="text-xs text-zinc-500">Relational & Dynamic Custom IoT Panel</p>
           </div>
           <div className="flex items-center gap-4">
             <div className="text-right">
               <div className="flex items-center justify-end gap-1.5">
                 <span className={`w-2 h-2 rounded-full ${connected && deviceStatus.active ? 'bg-green-500' : 'bg-zinc-300 animate-pulse'}`}></span>
                 <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
-                  {!connected 
-                    ? 'Syncing' 
-                    : deviceStatus.active 
-                      ? 'ESP32 Active' 
-                      : 'ESP32 Offline'}
+                  {!connected ? 'Syncing' : deviceStatus.active ? 'ESP32 Active' : 'ESP32 Offline'}
                 </span>
               </div>
               <span className="text-[10px] text-zinc-400 font-medium block mt-0.5">
                 Last Report: {renderLastSeenText()}
               </span>
             </div>
+            
+            {/* Main Config Manager Toggle */}
+            <button
+              onClick={() => setIsConfigOpen(true)}
+              className="p-2 border border-zinc-200 rounded-lg hover:bg-zinc-100 transition shadow-sm cursor-pointer bg-white"
+              title="Open Config Manager"
+            >
+              <Settings className="w-4 h-4 text-zinc-600" />
+            </button>
+
             <button
               onClick={handleRefresh}
               disabled={refreshing || !connected}
-              className="flex items-center gap-1.5 bg-white border border-zinc-200 hover:border-zinc-300 text-zinc-700 hover:text-zinc-900 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150 px-3 py-1.5 text-xs font-semibold rounded-lg shadow-sm active:scale-95 disabled:active:scale-100 cursor-pointer"
-              title="Request telemetry update from ESP32"
+              className="flex items-center gap-1.5 bg-white border border-zinc-200 hover:border-zinc-300 text-zinc-700 hover:text-zinc-900 disabled:opacity-50 disabled:cursor-not-allowed transitionpx-3 py-1.5 text-xs font-semibold rounded-lg shadow-sm active:scale-95 disabled:active:scale-100 cursor-pointer"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} strokeWidth={2.2} />
               <span>{refreshing ? 'Refreshing...' : 'Refresh'}</span>
@@ -558,45 +625,32 @@ export default function Dashboard() {
         </header>
 
         {/* Top Tier: Summary metrics (Reservoir Level, Temp, Humidity) */}
-        <div className={`grid grid-cols-3 gap-4 transition-opacity duration-300 ${isStale ? 'opacity-60' : ''}`}>
+        <div className={`grid grid-cols-1 sm:grid-cols-3 gap-4 transition-opacity duration-300 ${isStale ? 'opacity-60' : ''}`}>
+          
           {/* Reservoir Level */}
           <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-2 relative overflow-hidden flex flex-col justify-between">
             <div className="flex justify-between items-start">
               <div>
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-black uppercase tracking-wider font-semibold block">Reservoir Level</span>
-                  <button 
-                    onClick={() => {
-                      setTempConfigs({});
-                      setIsReservoirOpen(true);
-                    }}
-                    className="text-zinc-400 hover:text-zinc-600 transition-colors cursor-pointer p-0.5 rounded hover:bg-zinc-50"
-                    title="Open Reservoir Settings"
-                  >
-                    <Settings className="w-3 h-3" />
-                  </button>
-                </div>
-                {loading || !current || current.water_level === undefined || current.water_level === null ? (
-                  <div className="h-8 w-20 bg-zinc-100 rounded animate-pulse mt-1"></div>
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold block">Reservoir Level</span>
+                {loading || !waterSensor || waterReading === null ? (
+                  <div className="h-8 w-24 text-xs text-zinc-400 mt-1 italic">No active water level sensor</div>
                 ) : (
                   <div className="text-2xl font-bold tracking-tight text-zinc-900 mt-1">
                     {resStats.percentage}%
                   </div>
                 )}
               </div>
-              <Cylinder className={`w-6 h-6 ${resStats.percentage < 20 ? 'text-red-500' : 'text-zinc-400'}`} />
+              <Cylinder className={`w-6 h-6 ${resStats.percentage < 20 ? 'text-red-500 animate-pulse' : 'text-zinc-400'}`} />
             </div>
             
-            {/* Subtext info row */}
-            {!loading && current && current.water_level !== undefined && current.water_level !== null && (
+            {waterSensor && waterReading !== null && (
               <div className="text-[10px] text-zinc-500 font-medium flex justify-between items-center w-full mt-1">
                 <span>{resStats.liters}L / {resStats.capacity}L</span>
                 <span className="text-zinc-300">|</span>
                 <span>{resStats.height} cm height</span>
               </div>
             )}
-
-            {resStats.percentage < 20 && !loading && current && (
+            {waterSensor && resStats.percentage < 20 && (
               <span className="text-[9px] text-red-500 font-semibold block animate-pulse">Low Water Alert</span>
             )}
           </div>
@@ -605,11 +659,11 @@ export default function Dashboard() {
           <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1 relative overflow-hidden">
             <div className="flex justify-between items-start">
               <div>
-                <span className="text-[10px] text-black uppercase tracking-wider font-semibold block">Temperature</span>
-                {loading || !current || current.temp === undefined || current.temp === null ? (
-                  <div className="h-8 w-20 bg-zinc-100 rounded animate-pulse mt-1"></div>
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold block">Temperature</span>
+                {loading || !tempSensor || tempReading === null ? (
+                  <div className="h-8 w-24 text-xs text-zinc-400 mt-1 italic">No temperature sensor</div>
                 ) : (
-                  <div className="text-2xl font-bold tracking-tight text-zinc-900 mt-1">{Number(current.temp).toFixed(1)}°C</div>
+                  <div className="text-2xl font-bold tracking-tight text-zinc-900 mt-1">{Number(tempReading).toFixed(1)}°C</div>
                 )}
               </div>
               <Thermometer className="w-6 h-6 text-zinc-400" />
@@ -620,11 +674,11 @@ export default function Dashboard() {
           <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1 relative overflow-hidden">
             <div className="flex justify-between items-start">
               <div>
-                <span className="text-[10px] text-black uppercase tracking-wider font-semibold block">Humidity</span>
-                {loading || !current || current.hum === undefined || current.hum === null ? (
-                  <div className="h-8 w-20 bg-zinc-100 rounded animate-pulse mt-1"></div>
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold block">Humidity</span>
+                {loading || !humSensor || humReading === null ? (
+                  <div className="h-8 w-24 text-xs text-zinc-400 mt-1 italic">No humidity sensor</div>
                 ) : (
-                  <div className="text-2xl font-bold tracking-tight text-zinc-900 mt-1">{Number(current.hum).toFixed(1)}%</div>
+                  <div className="text-2xl font-bold tracking-tight text-zinc-900 mt-1">{Number(humReading).toFixed(1)}%</div>
                 )}
               </div>
               <Droplets className="w-6 h-6 text-zinc-400" />
@@ -632,369 +686,456 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Middle Tier: 5 uniform data cards for Soil Moisture (Zones 1-5) */}
+        {/* Middle Tier: Soil Moisture (Dynamic list) */}
         <div className="space-y-3">
-          <div className="flex items-center gap-1.5">
-            <h2 className="text-[10px] text-black uppercase tracking-wider font-bold">Soil Moisture</h2>
-            <button 
-              onClick={() => {
-                setTempConfigs({});
-                setIsCalibrateOpen(true);
-              }}
-              className="text-zinc-400 hover:text-zinc-600 transition-colors cursor-pointer p-0.5 rounded hover:bg-zinc-100"
-              title="Open Moisture Calibration Settings"
-            >
-              <Settings className="w-3.5 h-3.5" />
-            </button>
-          </div>
-          <div className={`grid grid-cols-1 sm:grid-cols-5 gap-4 transition-opacity duration-300 ${isStale ? 'opacity-60' : ''}`}>
-            {[
-              { id: 1, key: 'm1', label: 'Zone 1' },
-              { id: 2, key: 'm2', label: 'Zone 2' },
-              { id: 3, key: 'm3', label: 'Zone 3' },
-              { id: 4, key: 'm4', label: 'Zone 4' },
-              { id: 5, key: 'm5', label: 'Zone 5' },
-            ].map((zone) => {
-              const val = current ? current[zone.key] : undefined;
-              const hasVal = val !== undefined && val !== null;
-              const percentage = hasVal ? mapMoistureToPercentage(Number(val), zone.key) : 0;
-              const status = getMoistureStatus(percentage);
-              const barColor = getProgressBarColorClass(percentage);
-              
-              return (
-                <div key={zone.id} className="bg-white border border-zinc-200 rounded-xl p-4 shadow-sm space-y-3 flex flex-col justify-between">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <span className="text-[9px] font-bold text-black uppercase tracking-wider">{zone.label}</span>
-                      {loading || !hasVal ? (
-                        <div className="h-6 w-12 bg-zinc-100 rounded animate-pulse mt-0.5"></div>
-                      ) : (
-                        <div className="flex items-baseline gap-1 mt-0.5">
-                          <span className="text-lg font-bold text-zinc-800">{percentage}%</span>
-                          <span className={`text-[9px] uppercase tracking-wider ${status.color}`}>{status.label}</span>
-                        </div>
-                      )}
-                    </div>
-                    <Sprout className="w-5 h-5 text-zinc-400" />
-                  </div>
-                  <div className="w-full bg-zinc-100 rounded-full h-1 mt-1">
-                    {loading || !hasVal ? (
-                      <div className="h-1 bg-zinc-200 rounded-full w-1/2 animate-pulse"></div>
-                    ) : (
-                      <div 
-                        className={`${barColor} h-1 rounded-full transition-all duration-500`} 
-                        style={{ width: `${percentage}%` }}
-                      ></div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Bottom Tier: 4 distinct toggle switches for Pump Controls */}
-        <div className="space-y-3">
-          <h2 className="text-[10px] text-black uppercase tracking-wider font-bold">Pump Controls</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            {[
-              { id: 1, label: 'Pump 1' },
-              { id: 2, label: 'Pump 2' },
-              { id: 3, label: 'Pump 3' },
-              { id: 4, label: 'Pump 4' },
-            ].map((pump) => {
-              const isActive = pumps[pump.id];
-              const isToggling = togglingPumps[pump.id];
-              
-              return (
-                <div 
-                  key={pump.id} 
-                  className={`border rounded-xl p-5 flex justify-between items-center ${
-                    isActive 
-                      ? 'bg-emerald-50/40 border-emerald-200 shadow-sm' 
-                      : 'bg-white border-zinc-200 shadow-sm'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <svg className={`w-5 h-5 ${isActive ? 'text-emerald-500' : 'text-zinc-300'}`} fill="none" viewBox="0 0 24 24" strokeWidth="2.2" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 9h5v8H5z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 9V4h2v5M5 3h4" />
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 12H2v2h3M1 11v4" />
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M10 9l2-2h7a4 4 0 014 4v2a4 4 0 01-4 4h-7l-2-2v-6z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M14 7.5v9M17 7v10M20 8.5v7" />
-                    </svg>
-                    <div>
-                      <span className="text-sm font-semibold text-zinc-800 block">{pump.label}</span>
-                      <span className={`text-[9px] uppercase tracking-wider font-bold ${
-                        isActive ? 'text-emerald-600' : 'text-zinc-400'
-                      }`}>
-                        {isActive ? 'On' : 'Off'}
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handlePumpToggle(pump.id)}
-                    disabled={isToggling}
-                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                      isActive ? 'bg-emerald-500' : 'bg-zinc-200'
-                    } ${isToggling ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  >
-                    <span
-                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${
-                        isActive ? 'translate-x-5' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* System Configuration settings card */}
-        <div className="space-y-3">
-          <h2 className="text-[10px] text-black uppercase tracking-wider font-bold">System Configuration</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm flex justify-between items-center h-fit">
-              <div>
-                <span className="text-sm font-medium text-zinc-800 block">Telemetry Update Rate</span>
-                <span className="text-[10px] text-zinc-400 block mt-0.5">Frequency of ESP32 sleep-wake reports</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min="1"
-                  max="1440"
-                  value={customInterval}
-                  onChange={(e) => setCustomInterval(e.target.value)}
-                  disabled={togglingConfig}
-                  className="w-16 bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-zinc-400 text-center font-mono font-semibold"
-                />
-                <select
-                  value={intervalUnit}
-                  onChange={(e) => setIntervalUnit(e.target.value)}
-                  disabled={togglingConfig}
-                  className="bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-zinc-400 font-semibold cursor-pointer"
-                >
-                  <option value="minutes">Minutes</option>
-                  <option value="hours">Hours</option>
-                </select>
-                <button
-                  onClick={handleCustomIntervalSave}
-                  disabled={togglingConfig || !customInterval || parseInt(customInterval, 10) <= 0}
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-1.5 text-xs rounded-lg shadow-sm transition-all duration-150 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  Save
-                </button>
-              </div>
+          <h2 className="text-[10px] text-black uppercase tracking-wider font-bold">Soil Moisture</h2>
+          {moistureSensors.length === 0 ? (
+            <div className="bg-white border border-dashed border-zinc-200 rounded-xl p-8 text-center text-xs text-zinc-500">
+              No moisture sensors defined. Open the Config Manager to add custom sensors.
             </div>
-          </div>
-        </div>
-
-      </div>
-
-      {/* Moisture Calibration Dialog Modal */}
-      {isCalibrateOpen && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full border border-zinc-200 shadow-xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150">
-            {/* Header */}
-            <div className="flex justify-between items-center border-b border-zinc-100 p-5">
-              <div>
-                <h3 className="font-semibold text-zinc-900 text-sm">Moisture Calibration</h3>
-                <p className="text-[10px] text-zinc-500 mt-0.5">Set the Dry (Air) and Wet (Water) analog limits</p>
-              </div>
-              <button 
-                onClick={() => setIsCalibrateOpen(false)}
-                className="text-zinc-400 hover:text-zinc-600 cursor-pointer p-1 rounded-lg hover:bg-zinc-50 transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Content */}
-            <div className="p-5 space-y-4 max-h-[60vh] overflow-y-auto">
-              {[
-                { key: 'm1', label: 'Zone 1' },
-                { key: 'm2', label: 'Zone 2' },
-                { key: 'm3', label: 'Zone 3' },
-                { key: 'm4', label: 'Zone 4' },
-                { key: 'm5', label: 'Zone 5' }
-              ].map((sensor) => {
-                const rawVal = current ? current[sensor.key] : null;
-                const dryKey = `sensor_${sensor.key}_dry`;
-                const wetKey = `sensor_${sensor.key}_wet`;
+          ) : (
+            <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 transition-opacity duration-300 ${isStale ? 'opacity-60' : ''}`}>
+              {moistureSensors.map((sensor) => {
+                const reading = data.latest_readings?.[sensor.id];
+                const rawVal = reading?.value;
+                const hasVal = rawVal !== undefined && rawVal !== null;
+                const percentage = hasVal ? mapMoistureToPercentage(rawVal, sensor.dry_limit, sensor.wet_limit) : 0;
+                const status = getMoistureStatus(percentage);
+                const barColor = getProgressBarColorClass(percentage);
                 
-                const dry = tempConfigs[dryKey] !== undefined ? tempConfigs[dryKey] : (configs[dryKey] || '3400');
-                const wet = tempConfigs[wetKey] !== undefined ? tempConfigs[wetKey] : (configs[wetKey] || '1100');
-
                 return (
-                  <div key={sensor.key} className="flex justify-between items-center text-xs border-b border-zinc-100 pb-3 last:border-0 last:pb-0">
-                    <div>
-                      <span className="font-semibold text-zinc-700 block">{sensor.label}</span>
-                      <span className="text-[10px] text-zinc-400 font-mono">Raw: {rawVal !== null ? rawVal : 'N/A'}</span>
+                  <div key={sensor.id} className="bg-white border border-zinc-200 rounded-xl p-4 shadow-sm space-y-3 flex flex-col justify-between">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block leading-tight">{sensor.name}</span>
+                        <span className="text-[8px] text-zinc-400 font-mono">Pin: {sensor.pin}</span>
+                        {loading || !hasVal ? (
+                          <div className="h-6 w-12 bg-zinc-100 rounded animate-pulse mt-1"></div>
+                        ) : (
+                          <div className="flex items-baseline gap-1 mt-1">
+                            <span className="text-lg font-bold text-zinc-800">{percentage}%</span>
+                            <span className={`text-[8px] uppercase tracking-wider ${status.color}`}>{status.label}</span>
+                          </div>
+                        )}
+                      </div>
+                      <Sprout className="w-5 h-5 text-zinc-400" />
                     </div>
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-1.5">
-                        <label className="text-[10px] text-black font-medium">Wet:</label>
-                        <input 
-                          type="number"
-                          value={wet}
-                          onChange={(e) => setTempConfigs(prev => ({ ...prev, [wetKey]: e.target.value }))}
-                          className="w-16 bg-zinc-50 border border-zinc-200 rounded text-center py-1 px-1.5 font-mono text-[11px] focus:outline-none focus:border-zinc-400"
-                        />
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <label className="text-[10px] text-black font-medium">Dry:</label>
-                        <input 
-                          type="number"
-                          value={dry}
-                          onChange={(e) => setTempConfigs(prev => ({ ...prev, [dryKey]: e.target.value }))}
-                          className="w-16 bg-zinc-50 border border-zinc-200 rounded text-center py-1 px-1.5 font-mono text-[11px] focus:outline-none focus:border-zinc-400"
-                        />
-                      </div>
+                    <div className="w-full bg-zinc-100 rounded-full h-1 mt-1">
+                      {loading || !hasVal ? (
+                        <div className="h-1 bg-zinc-200 rounded-full w-1/2 animate-pulse"></div>
+                      ) : (
+                        <div className={`${barColor} h-1 rounded-full transition-all duration-500`} style={{ width: `${percentage}%` }}></div>
+                      )}
                     </div>
                   </div>
                 );
               })}
             </div>
-
-            {/* Footer */}
-            <div className="border-t border-zinc-100 bg-zinc-50/50 p-4 flex justify-end gap-2.5">
-              <button
-                onClick={() => setIsCalibrateOpen(false)}
-                className="bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 hover:text-zinc-955 font-semibold px-4 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfigSaveAll}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all"
-              >
-                Save Changes
-              </button>
-            </div>
-          </div>
+          )}
         </div>
-      )}
 
-      {/* Reservoir Calibration Dialog Modal */}
-      {isReservoirOpen && (
+        {/* Bottom Tier: Dynamic Pump Controls */}
+        <div className="space-y-3">
+          <h2 className="text-[10px] text-black uppercase tracking-wider font-bold">Pump Controls</h2>
+          {data.pumps.length === 0 ? (
+            <div className="bg-white border border-dashed border-zinc-200 rounded-xl p-6 text-center text-xs text-zinc-500">
+              No pumps configured. Open the settings panel to add dynamic pumps.
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              {data.pumps.map((pump) => {
+                const isActive = pumpsState[pump.id];
+                const isToggling = togglingPumps[pump.id];
+                
+                return (
+                  <div key={pump.id} className={`border rounded-xl p-5 flex justify-between items-center ${isActive ? 'bg-emerald-50/40 border-emerald-200 shadow-sm' : 'bg-white border-zinc-200 shadow-sm'}`}>
+                    <div className="flex items-center gap-3">
+                      <svg className={`w-5 h-5 ${isActive ? 'text-emerald-500' : 'text-zinc-300'}`} fill="none" viewBox="0 0 24 24" strokeWidth="2.2" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 9h5v8H5z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 9V4h2v5M5 3h4" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M10 9l2-2h7a4 4 0 014 4v2a4 4 0 01-4 4h-7l-2-2v-6z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M14 7.5v9" />
+                      </svg>
+                      <div>
+                        <span className="text-sm font-semibold text-zinc-800 block leading-tight">{pump.name}</span>
+                        <span className="text-[8px] text-zinc-400 font-mono">Pin: {pump.pin}</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handlePumpToggle(pump.id, pump.pin)}
+                      disabled={isToggling}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${isActive ? 'bg-emerald-500' : 'bg-zinc-200'} ${isToggling ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${isActive ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+      </div>
+
+      {/* COMPREHENSIVE CONFIGURATION MANAGER MODAL */}
+      {isConfigOpen && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-sm w-full border border-zinc-200 shadow-xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-white rounded-2xl max-w-2xl w-full border border-zinc-200 shadow-2xl overflow-hidden flex flex-col h-[80vh] animate-in fade-in zoom-in-95 duration-150">
+            
             {/* Header */}
             <div className="flex justify-between items-center border-b border-zinc-100 p-5">
               <div>
-                <h3 className="font-semibold text-zinc-900 text-sm">Reservoir Settings</h3>
-                <p className="text-[10px] text-zinc-500 mt-0.5">Configure tank specs & sensor bounds</p>
+                <h3 className="font-semibold text-zinc-900 text-sm">System Configuration Manager</h3>
+                <p className="text-[10px] text-zinc-500 mt-0.5">Edit networks, calibrate sensors, and assign hardware pins</p>
               </div>
-              <button 
-                onClick={() => setIsReservoirOpen(false)}
-                className="text-zinc-400 hover:text-zinc-600 cursor-pointer p-1 rounded-lg hover:bg-zinc-50 transition-colors"
-              >
+              <button onClick={() => { setIsConfigOpen(false); fetchDashboardData(); }} className="text-zinc-400 hover:text-zinc-600 cursor-pointer p-1 rounded-lg hover:bg-zinc-50 transition-colors">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Content */}
-            <div className="p-5 space-y-4">
-              {/* Raw distance info */}
-              <div className="flex justify-between items-center bg-zinc-50 rounded-xl p-3 border border-zinc-100 text-xs">
-                <span className="text-zinc-500">Current Sensor Distance:</span>
-                <span className="font-mono font-bold text-zinc-800">
-                  {current && current.water_level !== null ? `${current.water_level} cm` : 'N/A'}
-                </span>
+            {/* Modal Body (Sidebar Tabs + Content Layout) */}
+            <div className="flex flex-1 overflow-hidden">
+              
+              {/* Sidebar Tabs */}
+              <div className="w-1/4 border-r border-zinc-100 bg-zinc-50/50 p-3 space-y-1">
+                {[
+                  { id: 'network', label: 'Network Info', icon: Wifi },
+                  { id: 'sensors', label: 'Sensors', icon: Sprout },
+                  { id: 'pumps', label: 'Pumps', icon: Settings },
+                  { id: 'general', label: 'General Settings', icon: Cylinder }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setConfigTab(tab.id)}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold rounded-lg text-left transition-colors cursor-pointer ${
+                      configTab === tab.id ? 'bg-white border border-zinc-200 text-blue-600 shadow-sm' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
+                    }`}
+                  >
+                    <tab.icon className="w-3.5 h-3.5" />
+                    <span>{tab.label}</span>
+                  </button>
+                ))}
               </div>
 
-              {/* Min / Max bounds */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-semibold text-black uppercase tracking-wider block font-bold">Empty Level (cm)</label>
-                  <input 
-                    type="number"
-                    value={tempConfigs['reservoir_empty_distance_cm'] !== undefined ? tempConfigs['reservoir_empty_distance_cm'] : (configs['reservoir_empty_distance_cm'] || '100')}
-                    onChange={(e) => setTempConfigs(prev => ({ ...prev, reservoir_empty_distance_cm: e.target.value }))}
-                    className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
-                  />
-                  <span className="text-[9px] text-zinc-400 block">Sensor to bottom</span>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-semibold text-black uppercase tracking-wider block font-bold">Full Level (cm)</label>
-                  <input 
-                    type="number"
-                    value={tempConfigs['reservoir_full_distance_cm'] !== undefined ? tempConfigs['reservoir_full_distance_cm'] : (configs['reservoir_full_distance_cm'] || '0')}
-                    onChange={(e) => setTempConfigs(prev => ({ ...prev, reservoir_full_distance_cm: e.target.value }))}
-                    className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
-                  />
-                  <span className="text-[9px] text-zinc-400 block">Sensor to full level</span>
-                </div>
-              </div>
-
-              {/* Mode Select */}
-              <div className="space-y-1">
-                <label className="text-[10px] font-semibold text-black uppercase tracking-wider block font-bold">Capacity Calculation Mode</label>
-                <select
-                  value={tempConfigs['reservoir_use_dimensions'] !== undefined ? tempConfigs['reservoir_use_dimensions'] : (configs['reservoir_use_dimensions'] || 'false')}
-                  onChange={(e) => setTempConfigs(prev => ({ ...prev, reservoir_use_dimensions: e.target.value }))}
-                  className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-2.5 text-xs text-zinc-850 focus:outline-none focus:border-zinc-400 cursor-pointer"
-                >
-                  <option value="false">Direct Volume (Liters)</option>
-                  <option value="true">Tank Dimensions (Width & Length)</option>
-                </select>
-              </div>
-
-              {/* Conditional Inputs */}
-              {(tempConfigs['reservoir_use_dimensions'] !== undefined ? tempConfigs['reservoir_use_dimensions'] === 'true' : configs['reservoir_use_dimensions'] === 'true') ? (
-                <div className="grid grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-1 duration-150">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-semibold text-black uppercase tracking-wider block font-bold">Width (cm)</label>
-                    <input 
-                      type="number"
-                      value={tempConfigs['reservoir_width_cm'] !== undefined ? tempConfigs['reservoir_width_cm'] : (configs['reservoir_width_cm'] || '60')}
-                      onChange={(e) => setTempConfigs(prev => ({ ...prev, reservoir_width_cm: e.target.value }))}
-                      className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
-                    />
+              {/* Tab Content Area */}
+              <div className="flex-1 p-6 overflow-y-auto space-y-6">
+                
+                {/* 1. NETWORK SETTINGS TAB */}
+                {configTab === 'network' && (
+                  <div className="space-y-4">
+                    <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wider border-b pb-1.5">WiFi Setup</h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">SSID / Network Name</label>
+                        <input
+                          type="text"
+                          value={wifiSsid}
+                          onChange={(e) => setWifiSsid(e.target.value)}
+                          className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">WiFi Password</label>
+                        <input
+                          type="password"
+                          value={wifiPassword}
+                          onChange={(e) => setWifiPassword(e.target.value)}
+                          className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                        />
+                      </div>
+                      <button
+                        onClick={handleWifiSave}
+                        disabled={togglingConfig}
+                        className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
+                      >
+                        Save WiFi Settings
+                      </button>
+                    </div>
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-semibold text-black uppercase tracking-wider block font-bold">Length (cm)</label>
-                    <input 
-                      type="number"
-                      value={tempConfigs['reservoir_length_cm'] !== undefined ? tempConfigs['reservoir_length_cm'] : (configs['reservoir_length_cm'] || '70')}
-                      onChange={(e) => setTempConfigs(prev => ({ ...prev, reservoir_length_cm: e.target.value }))}
-                      className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
-                    />
+                )}
+
+                {/* 2. DYNAMIC SENSOR CONFIGURATION TAB */}
+                {configTab === 'sensors' && (
+                  <div className="space-y-6">
+                    <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wider border-b pb-1.5">Manage Sensors</h4>
+
+                    {/* Sensor Config Form */}
+                    <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-4 space-y-3 text-xs">
+                      <span className="font-bold text-zinc-700 block text-[11px] uppercase tracking-wider">
+                        {editingSensorId ? 'Edit Sensor Configuration' : 'Add Custom Sensor'}
+                      </span>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Sensor Name</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Zone 6 Lavender"
+                            value={sensorName}
+                            onChange={(e) => setSensorName(e.target.value)}
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Sensor Type</label>
+                          <select
+                            value={sensorType}
+                            onChange={(e) => setSensorType(e.target.value)}
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none"
+                          >
+                            <option value="moisture">Soil Moisture</option>
+                            <option value="temperature">Temperature</option>
+                            <option value="humidity">Humidity</option>
+                            <option value="water_level">Water Level (Reservoir)</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">ESP32 Pin</label>
+                          <input
+                            type="number"
+                            value={sensorPin}
+                            onChange={(e) => setSensorPin(e.target.value)}
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Group Name</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Soil Moisture"
+                            value={sensorGroup}
+                            onChange={(e) => setSensorGroup(e.target.value)}
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none"
+                          />
+                        </div>
+                        {(sensorType === 'moisture' || sensorType === 'water_level') && (
+                          <div className="flex gap-2 col-span-3">
+                            <div className="w-1/2">
+                              <label className="text-[9px] font-semibold text-zinc-500 uppercase">Dry (Air) Limit</label>
+                              <input
+                                type="number"
+                                value={sensorDryLimit}
+                                onChange={(e) => setSensorDryLimit(e.target.value)}
+                                className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none font-mono"
+                              />
+                            </div>
+                            <div className="w-1/2">
+                              <label className="text-[9px] font-semibold text-zinc-500 uppercase">Wet (Water) Limit</label>
+                              <input
+                                type="number"
+                                value={sensorWetLimit}
+                                onChange={(e) => setSensorWetLimit(e.target.value)}
+                                className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none font-mono"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex justify-end gap-2 pt-1">
+                        {editingSensorId && (
+                          <button
+                            onClick={() => {
+                              setEditingSensorId(null);
+                              setSensorName('');
+                              setSensorPin(32);
+                              setSensorGroup('Soil Moisture');
+                            }}
+                            className="bg-white border border-zinc-200 px-3 py-1.5 text-xs font-semibold rounded-lg"
+                          >
+                            Cancel
+                          </button>
+                        )}
+                        <button
+                          onClick={handleSensorSave}
+                          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-1.5 text-xs rounded-lg active:scale-95 transition-all shadow-sm"
+                        >
+                          {editingSensorId ? 'Update Sensor' : 'Add Sensor'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Sensor Configs List */}
+                    <div className="space-y-2">
+                      <span className="font-bold text-zinc-700 block text-[10px] uppercase tracking-wider">Active Sensors</span>
+                      {data.sensors.map(sensor => (
+                        <div key={sensor.id} className="flex justify-between items-center text-xs bg-white border border-zinc-200 p-3 rounded-xl shadow-sm">
+                          <div>
+                            <span className="font-bold text-zinc-800 block">{sensor.name}</span>
+                            <span className="text-[10px] text-zinc-400 font-mono">
+                              Type: {sensor.type} | Pin: {sensor.pin} | Group: {sensor.sensor_group}
+                            </span>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                setEditingSensorId(sensor.id);
+                                setSensorName(sensor.name);
+                                setSensorType(sensor.type);
+                                setSensorPin(sensor.pin);
+                                setSensorGroup(sensor.sensor_group);
+                                setSensorDryLimit(sensor.dry_limit || 3400);
+                                setSensorWetLimit(sensor.wet_limit || 1100);
+                              }}
+                              className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-zinc-50 rounded-lg text-zinc-600 transition"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleSensorDelete(sensor.id)}
+                              className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-red-50 text-red-500 rounded-lg transition"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <div className="space-y-1 animate-in fade-in slide-in-from-top-1 duration-150">
-                  <label className="text-[10px] font-semibold text-black uppercase tracking-wider block font-bold">Total Volume Capacity (Liters)</label>
-                  <input 
-                    type="number"
-                    value={tempConfigs['reservoir_total_volume_liters'] !== undefined ? tempConfigs['reservoir_total_volume_liters'] : (configs['reservoir_total_volume_liters'] || '100')}
-                    onChange={(e) => setTempConfigs(prev => ({ ...prev, reservoir_total_volume_liters: e.target.value }))}
-                    className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
-                  />
-                </div>
-              )}
+                )}
+
+                {/* 3. DYNAMIC PUMP CONFIGURATION TAB */}
+                {configTab === 'pumps' && (
+                  <div className="space-y-6">
+                    <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wider border-b pb-1.5">Manage Pumps</h4>
+
+                    {/* Pump Config Form */}
+                    <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-4 space-y-3 text-xs">
+                      <span className="font-bold text-zinc-700 block text-[11px] uppercase tracking-wider">
+                        {editingPumpId ? 'Edit Pump Settings' : 'Add Custom Pump'}
+                      </span>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Pump Name</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Pump 5 Solenoid"
+                            value={pumpName}
+                            onChange={(e) => setPumpName(e.target.value)}
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">ESP32 Pin</label>
+                          <input
+                            type="number"
+                            value={pumpPin}
+                            onChange={(e) => setPumpPin(e.target.value)}
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none font-mono"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end gap-2 pt-1">
+                        {editingPumpId && (
+                          <button
+                            onClick={() => {
+                              setEditingPumpId(null);
+                              setPumpName('');
+                              setPumpPin(25);
+                            }}
+                            className="bg-white border border-zinc-200 px-3 py-1.5 text-xs font-semibold rounded-lg"
+                          >
+                            Cancel
+                          </button>
+                        )}
+                        <button
+                          onClick={handlePumpSave}
+                          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-1.5 text-xs rounded-lg active:scale-95 transition-all shadow-sm"
+                        >
+                          {editingPumpId ? 'Update Pump' : 'Add Pump'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Pumps List */}
+                    <div className="space-y-2">
+                      <span className="font-bold text-zinc-700 block text-[10px] uppercase tracking-wider">Active Pumps</span>
+                      {data.pumps.map(pump => (
+                        <div key={pump.id} className="flex justify-between items-center text-xs bg-white border border-zinc-200 p-3 rounded-xl shadow-sm">
+                          <div>
+                            <span className="font-bold text-zinc-800 block">{pump.name}</span>
+                            <span className="text-[10px] text-zinc-400 font-mono">Pin Assignment: {pump.pin}</span>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                setEditingPumpId(pump.id);
+                                setPumpName(pump.name);
+                                setPumpPin(pump.pin);
+                              }}
+                              className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-zinc-50 rounded-lg text-zinc-600 transition"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handlePumpDelete(pump.id)}
+                              className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-red-50 text-red-500 rounded-lg transition"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. GENERAL SYSTEM CONFIG TAB */}
+                {configTab === 'general' && (
+                  <div className="space-y-6">
+                    <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wider border-b pb-1.5">General Config</h4>
+                    
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Telemetry Sleep Cycle</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="1"
+                          max="1440"
+                          value={customInterval}
+                          onChange={(e) => setCustomInterval(e.target.value)}
+                          className="w-20 bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-zinc-400 text-center font-mono font-semibold"
+                        />
+                        <select
+                          value={intervalUnit}
+                          onChange={(e) => setIntervalUnit(e.target.value)}
+                          className="bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-zinc-400 font-semibold cursor-pointer"
+                        >
+                          <option value="minutes">Minutes</option>
+                          <option value="hours">Hours</option>
+                        </select>
+                        <button
+                          onClick={handleCustomIntervalSave}
+                          disabled={togglingConfig}
+                          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
+                        >
+                          Save Interval
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+              </div>
             </div>
 
             {/* Footer */}
-            <div className="border-t border-zinc-100 bg-zinc-50/50 p-4 flex justify-end gap-2.5">
+            <div className="border-t border-zinc-100 bg-zinc-50/50 p-4 flex justify-end">
               <button
-                onClick={() => setIsReservoirOpen(false)}
-                className="bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 hover:text-zinc-955 font-semibold px-4 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all"
+                onClick={() => { setIsConfigOpen(false); fetchDashboardData(); }}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all"
               >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfigSaveAll}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all"
-              >
-                Save Changes
+                Done
               </button>
             </div>
+
           </div>
         </div>
       )}
+
     </div>
   );
 }
