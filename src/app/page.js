@@ -31,6 +31,8 @@ export default function Dashboard() {
   const [tempConfigs, setTempConfigs] = useState({});
   const [isReservoirOpen, setIsReservoirOpen] = useState(false);
   const [lastReportTime, setLastReportTime] = useState(null);
+  const [customInterval, setCustomInterval] = useState(15);
+  const [intervalUnit, setIntervalUnit] = useState('minutes');
 
   const fetchDashboardData = async () => {
     try {
@@ -124,6 +126,17 @@ export default function Dashboard() {
     return () => clearInterval(timer);
   }, [lastReportTime, deviceStatus.interval_minutes]);
 
+  useEffect(() => {
+    const totalMinutes = deviceStatus.interval_minutes || 15;
+    if (totalMinutes % 60 === 0) {
+      setCustomInterval(totalMinutes / 60);
+      setIntervalUnit('hours');
+    } else {
+      setCustomInterval(totalMinutes);
+      setIntervalUnit('minutes');
+    }
+  }, [deviceStatus.interval_minutes]);
+
   const handlePumpToggle = async (pumpId) => {
     if (togglingPumps[pumpId]) return;
     
@@ -159,11 +172,17 @@ export default function Dashboard() {
     }
   };
 
-  const handleIntervalChange = async (newInterval) => {
+  const handleCustomIntervalSave = async () => {
     if (togglingConfig) return;
     
-    setTogglingConfig(true);
+    let totalMinutes = parseInt(customInterval, 10);
+    if (isNaN(totalMinutes) || totalMinutes <= 0) return;
     
+    if (intervalUnit === 'hours') {
+      totalMinutes = totalMinutes * 60;
+    }
+    
+    setTogglingConfig(true);
     try {
       const res = await fetch('/api/config', {
         method: 'POST',
@@ -172,7 +191,7 @@ export default function Dashboard() {
         },
         body: JSON.stringify({
           key: 'telemetry_interval_minutes',
-          value: String(newInterval)
+          value: String(totalMinutes)
         })
       });
       
@@ -181,14 +200,13 @@ export default function Dashboard() {
         if (json.success) {
           setDeviceStatus(prev => ({ 
             ...prev, 
-            interval_minutes: parseInt(newInterval, 10) 
+            interval_minutes: totalMinutes 
           }));
-          // Immediately trigger status refresh
-          fetchDashboardData();
+          await fetchDashboardData();
         }
       }
     } catch (err) {
-      console.error('Failed to update telemetry interval:', err);
+      console.error('Failed to update custom telemetry interval:', err);
     } finally {
       setTogglingConfig(false);
     }
@@ -198,6 +216,8 @@ export default function Dashboard() {
     if (refreshing) return;
     
     setRefreshing(true);
+    const lastTimestamp = data.current?.created_at;
+    
     try {
       const res = await fetch('/api/refresh', {
         method: 'POST'
@@ -205,15 +225,45 @@ export default function Dashboard() {
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
-          // Immediately trigger dashboard data fetch to retrieve the latest state
-          await fetchDashboardData();
+          let attempts = 0;
+          const pollInterval = setInterval(async () => {
+            attempts++;
+            try {
+              const dashRes = await fetch('/api/dashboard');
+              if (dashRes.ok) {
+                const dashJson = await dashRes.json();
+                if (dashJson.success) {
+                  const newTimestamp = dashJson.current?.created_at;
+                  if (newTimestamp !== lastTimestamp) {
+                    setData({ current: dashJson.current });
+                    if (dashJson.device_status) {
+                      setDeviceStatus(dashJson.device_status);
+                    }
+                    clearInterval(pollInterval);
+                    setRefreshing(false);
+                    return;
+                  }
+                }
+              }
+            } catch (err) {
+              console.error('Error polling after refresh:', err);
+            }
+            
+            if (attempts >= 8) {
+              clearInterval(pollInterval);
+              setRefreshing(false);
+              fetchDashboardData();
+            }
+          }, 1000);
         } else {
           console.error('Refresh command rejected:', json.error);
+          setRefreshing(false);
         }
+      } else {
+        setRefreshing(false);
       }
     } catch (err) {
       console.error('Failed to trigger telemetry refresh:', err);
-    } finally {
       setRefreshing(false);
     }
   };
@@ -617,18 +667,33 @@ export default function Dashboard() {
                 <span className="text-sm font-medium text-zinc-800 block">Telemetry Update Rate</span>
                 <span className="text-[10px] text-zinc-400 block mt-0.5">Frequency of ESP32 sleep-wake reports</span>
               </div>
-              <select
-                value={deviceStatus.interval_minutes}
-                disabled={togglingConfig}
-                onChange={(e) => handleIntervalChange(e.target.value)}
-                className="bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-zinc-400 font-semibold cursor-pointer disabled:opacity-50"
-              >
-                <option value="5">Every 5 minutes</option>
-                <option value="10">Every 10 minutes</option>
-                <option value="15">Every 15 minutes</option>
-                <option value="30">Every 30 minutes</option>
-                <option value="60">Every 60 minutes</option>
-              </select>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="1"
+                  max="1440"
+                  value={customInterval}
+                  onChange={(e) => setCustomInterval(e.target.value)}
+                  disabled={togglingConfig}
+                  className="w-16 bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-zinc-400 text-center font-mono font-semibold"
+                />
+                <select
+                  value={intervalUnit}
+                  onChange={(e) => setIntervalUnit(e.target.value)}
+                  disabled={togglingConfig}
+                  className="bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-zinc-400 font-semibold cursor-pointer"
+                >
+                  <option value="minutes">Minutes</option>
+                  <option value="hours">Hours</option>
+                </select>
+                <button
+                  onClick={handleCustomIntervalSave}
+                  disabled={togglingConfig || !customInterval || parseInt(customInterval, 10) <= 0}
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-1.5 text-xs rounded-lg shadow-sm transition-all duration-150 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  Save
+                </button>
+              </div>
             </div>
           </div>
         </div>
