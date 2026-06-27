@@ -112,6 +112,53 @@ export async function POST(request) {
     `;
     const intervalMinutes = configs.length > 0 ? parseInt(configs[0].value, 10) : 15;
 
+    // Construct telemetry payload for real-time subscribers
+    const telemetryPayload = {
+      device_id: deviceId,
+      m1: numM1,
+      m2: numM2,
+      m3: numM3,
+      m4: numM4,
+      m5: numM5,
+      temp: numTemp,
+      hum: numHum,
+      water_level: numWaterLevel,
+      created_at: new Date().toISOString()
+    };
+
+    // Publish telemetry payload to EMQX broker asynchronously
+    const apiUrl = process.env.EMQX_API_URL;
+    const apiKey = process.env.EMQX_API_KEY;
+    const apiSecret = process.env.EMQX_API_SECRET;
+
+    if (apiUrl && apiKey && apiSecret) {
+      try {
+        const authHeader = 'Basic ' + Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
+        let cleanUrl = apiUrl.replace(/\/$/, '');
+        if (cleanUrl.endsWith('/api/v5')) {
+          cleanUrl = cleanUrl.slice(0, -7);
+        }
+        const publishUrl = cleanUrl + '/api/v5/publish';
+
+        await fetch(publishUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': authHeader,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            topic: 'device/telemetry',
+            qos: 0,
+            payload: JSON.stringify(telemetryPayload),
+            payload_encoding: 'plain'
+          }),
+          signal: AbortSignal.timeout(4000)
+        });
+      } catch (err) {
+        console.error('Failed to publish telemetry update to EMQX broker:', err.message);
+      }
+    }
+
     return NextResponse.json(
       { 
         success: true, 

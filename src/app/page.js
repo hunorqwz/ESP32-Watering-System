@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import mqtt from 'mqtt';
 import { Cylinder, Thermometer, Droplets, Sprout, RefreshCw, Settings, X } from 'lucide-react';
 
 export default function Dashboard() {
@@ -81,10 +82,32 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchDashboardData();
-    // Poll every 10 seconds for real-time telemetry updates
-    const interval = setInterval(() => {
-      fetchDashboardData();
-    }, 10000);
+
+    let interval = null;
+
+    const startPolling = () => {
+      if (interval) clearInterval(interval);
+      interval = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          fetchDashboardData();
+        }
+      }, 10000);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchDashboardData();
+        startPolling();
+      } else {
+        if (interval) {
+          clearInterval(interval);
+          interval = null;
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    startPolling();
 
     // Register service worker for PWA support only in production.
     // In development, actively unregister any service workers to prevent cache lockups.
@@ -104,7 +127,77 @@ export default function Dashboard() {
       }
     }
 
-    return () => clearInterval(interval);
+    return () => {
+      if (interval) clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    const brokerUrl = 'wss://bcc1fdaf.ala.eu-central-1.emqxsl.com:8084/mqtt';
+    const username = process.env.NEXT_PUBLIC_EMQX_MQTT_USER;
+    const password = process.env.NEXT_PUBLIC_EMQX_MQTT_PASSWORD;
+
+    if (!username || !password) {
+      console.warn('MQTT WebSockets client credentials not found in environment variables. WebSockets are disabled.');
+      return;
+    }
+
+    console.log('Connecting to EMQX broker via WebSockets...');
+    const client = mqtt.connect(brokerUrl, {
+      username: username,
+      password: password,
+      clientId: 'web_dashboard_' + Math.random().toString(16).substr(2, 8),
+      clean: true,
+      connectTimeout: 5000,
+      reconnectPeriod: 10000
+    });
+
+    client.on('connect', () => {
+      console.log('Connected to EMQX broker via WebSockets on port 8084.');
+      client.subscribe('device/telemetry', (err) => {
+        if (!err) console.log('Subscribed to device/telemetry topic.');
+      });
+      client.subscribe('device/commands', (err) => {
+        if (!err) console.log('Subscribed to device/commands topic.');
+      });
+    });
+
+    client.on('message', (topic, message) => {
+      try {
+        const payload = JSON.parse(message.toString());
+        console.log(`Received message on [${topic}]:`, payload);
+
+        if (topic === 'device/telemetry') {
+          setData({ current: payload });
+          setLastReportTime(new Date(payload.created_at || Date.now()).getTime());
+          setDeviceStatus(prev => ({
+            ...prev,
+            last_seen_seconds: 0,
+            active: true
+          }));
+        } else if (topic === 'device/commands') {
+          const { pump, state } = payload;
+          if (pump !== undefined && state !== undefined) {
+            setPumps(prev => ({
+              ...prev,
+              [pump]: state === 1
+            }));
+          }
+        }
+      } catch (err) {
+        console.error('Error parsing MQTT message:', err);
+      }
+    });
+
+    client.on('error', (err) => {
+      console.error('MQTT connection error:', err);
+    });
+
+    return () => {
+      console.log('Disconnecting from MQTT WebSockets client...');
+      client.end();
+    };
   }, []);
 
   useEffect(() => {
