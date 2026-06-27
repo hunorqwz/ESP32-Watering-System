@@ -343,15 +343,15 @@ export default function Dashboard() {
   };
 
   const getMoistureStatus = (pct) => {
-    if (pct < 30) return { label: 'Dry', color: 'text-orange-500 font-semibold' };
-    if (pct <= 70) return { label: 'Good', color: 'text-emerald-500 font-semibold' };
-    return { label: 'Wet', color: 'text-blue-600 font-semibold' };
+    if (pct < 30) return { label: 'Dry', color: 'text-zinc-400 font-semibold' };
+    if (pct <= 70) return { label: 'Good', color: 'text-zinc-600 font-semibold' };
+    return { label: 'Wet', color: 'text-zinc-800 font-semibold' };
   };
 
   const getProgressBarColorClass = (pct) => {
-    if (pct < 30) return 'bg-gradient-to-r from-amber-400 to-orange-500';
-    if (pct <= 70) return 'bg-gradient-to-r from-emerald-400 to-teal-500';
-    return 'bg-blue-600';
+    if (pct < 30) return 'bg-zinc-300';
+    if (pct <= 70) return 'bg-zinc-500';
+    return 'bg-zinc-800';
   };
 
   return (
@@ -563,7 +563,7 @@ export default function Dashboard() {
                       <span className={`text-[9px] uppercase tracking-wider font-bold ${
                         isActive ? 'text-emerald-600' : 'text-zinc-400'
                       }`}>
-                        {isActive ? 'Watering' : 'Standby'}
+                        {isActive ? 'On' : 'Off'}
                       </span>
                     </div>
                   </div>
