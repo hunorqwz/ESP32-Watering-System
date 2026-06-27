@@ -16,6 +16,8 @@ export async function POST(request) {
     // Limit keys to prevent injection or arbitrary inserts
     const allowedKeys = [
       'telemetry_interval_minutes',
+      'wifi_ssid',
+      'wifi_password',
       'sensor_m1_dry', 'sensor_m1_wet',
       'sensor_m2_dry', 'sensor_m2_wet',
       'sensor_m3_dry', 'sensor_m3_wet',
@@ -36,18 +38,24 @@ export async function POST(request) {
     }
 
     const sql = getDb();
+    let valueToStore = String(value);
+
+    if (key === 'wifi_password') {
+      const { encrypt } = await import('@/lib/crypto');
+      valueToStore = encrypt(valueToStore);
+    }
 
     // Update the config key
     await sql`
       INSERT INTO system_config (key, value, updated_at)
-      VALUES (${key}, ${String(value)}, CURRENT_TIMESTAMP)
+      VALUES (${key}, ${valueToStore}, CURRENT_TIMESTAMP)
       ON CONFLICT (key) DO 
       UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP
     `;
 
     return NextResponse.json({
       success: true,
-      message: `Configuration "${key}" updated successfully to "${value}".`
+      message: `Configuration "${key}" updated successfully.`
     });
   } catch (error) {
     console.error('Failed to update system config:', error);

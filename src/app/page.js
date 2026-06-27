@@ -50,6 +50,18 @@ export default function Dashboard() {
   const [pumpName, setPumpName] = useState('');
   const [pumpPin, setPumpPin] = useState(25);
 
+  // Dynamic UI feedback states
+  const [toasts, setToasts] = useState([]);
+  const [confirmDialog, setConfirmDialog] = useState(null);
+
+  const showToast = (message, type = 'success') => {
+    const id = Math.random().toString(36).slice(2, 9);
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4000);
+  };
+
   const fetchDashboardData = async () => {
     try {
       const res = await fetch('/api/dashboard');
@@ -153,83 +165,102 @@ export default function Dashboard() {
 
   // WebSockets Real-Time Push connection
   useEffect(() => {
-    const brokerUrl = 'wss://bcc1fdaf.ala.eu-central-1.emqxsl.com:8084/mqtt';
-    const username = process.env.NEXT_PUBLIC_EMQX_MQTT_USER;
-    const password = process.env.NEXT_PUBLIC_EMQX_MQTT_PASSWORD;
+    let client = null;
+    let active = true;
 
-    if (!username || !password) {
-      console.warn('MQTT WebSockets client credentials not found in environment variables. WebSockets are disabled.');
-      return;
-    }
-
-    console.log('Connecting to EMQX broker via WebSockets...');
-    const client = mqtt.connect(brokerUrl, {
-      username: username,
-      password: password,
-      clientId: 'web_dashboard_' + Math.random().toString(16).slice(2, 10),
-      clean: true,
-      connectTimeout: 5000,
-      reconnectPeriod: 10000
-    });
-
-    client.on('connect', () => {
-      console.log('Connected to EMQX broker via WebSockets on port 8084.');
-      client.subscribe('device/telemetry', (err) => {
-        if (!err) console.log('Subscribed to device/telemetry topic.');
-      });
-      client.subscribe('device/commands', (err) => {
-        if (!err) console.log('Subscribed to device/commands topic.');
-      });
-    });
-
-    client.on('message', (topic, message) => {
+    const initMqtt = async () => {
       try {
-        const payload = JSON.parse(message.toString());
-        console.log(`Received message on [${topic}]:`, payload);
-
-        if (topic === 'device/telemetry') {
-          // Relational format update
-          if (payload.readings) {
-            setData(prev => {
-              const updatedReadings = { ...prev.latest_readings };
-              Object.keys(payload.readings).forEach(sensorId => {
-                updatedReadings[sensorId] = {
-                  value: payload.readings[sensorId],
-                  created_at: payload.created_at
-                };
-              });
-              return { ...prev, latest_readings: updatedReadings };
-            });
-
-            const t = new Date(payload.created_at).getTime();
-            setLastReportTime(t);
-            setDeviceStatus(prev => ({
-              ...prev,
-              last_seen_seconds: 0,
-              active: true
-            }));
-          }
-        } else if (topic === 'device/commands') {
-          const { pump, state } = payload;
-          if (pump !== undefined && state !== undefined) {
-            setPumpsState(prev => ({
-              ...prev,
-              [pump]: state === 1
-            }));
-          }
+        const res = await fetch('/api/mqtt-auth');
+        if (!res.ok) {
+          throw new Error('MQTT credentials not found or not configured.');
         }
-      } catch (err) {
-        console.error('Error parsing MQTT message:', err);
-      }
-    });
+        const authData = await res.json();
+        if (!authData.success || !authData.username || !authData.password) {
+          throw new Error('MQTT credentials payload is incomplete.');
+        }
 
-    client.on('error', (err) => {
-      console.error('MQTT connection error:', err);
-    });
+        if (!active) return; // Prevent connecting if component unmounted while fetching
+
+        const brokerUrl = 'wss://bcc1fdaf.ala.eu-central-1.emqxsl.com:8084/mqtt';
+        console.log('Connecting to EMQX broker via WebSockets...');
+        client = mqtt.connect(brokerUrl, {
+          username: authData.username,
+          password: authData.password,
+          clientId: 'web_dashboard_' + Math.random().toString(16).slice(2, 10),
+          clean: true,
+          connectTimeout: 5000,
+          reconnectPeriod: 10000
+        });
+
+        client.on('connect', () => {
+          console.log('Connected to EMQX broker via WebSockets on port 8084.');
+          client.subscribe('device/telemetry', (err) => {
+            if (!err) console.log('Subscribed to device/telemetry topic.');
+          });
+          client.subscribe('device/commands', (err) => {
+            if (!err) console.log('Subscribed to device/commands topic.');
+          });
+        });
+
+        client.on('message', (topic, message) => {
+          try {
+            const payload = JSON.parse(message.toString());
+            console.log(`Received message on [${topic}]:`, payload);
+
+            if (topic === 'device/telemetry') {
+              // Relational format update
+              if (payload.readings) {
+                setData(prev => {
+                  const updatedReadings = { ...prev.latest_readings };
+                  Object.keys(payload.readings).forEach(sensorId => {
+                    updatedReadings[sensorId] = {
+                      value: payload.readings[sensorId],
+                      created_at: payload.created_at
+                    };
+                  });
+                  return { ...prev, latest_readings: updatedReadings };
+                });
+
+                const t = new Date(payload.created_at).getTime();
+                setLastReportTime(t);
+                setDeviceStatus(prev => ({
+                  ...prev,
+                  last_seen_seconds: 0,
+                  active: true
+                }));
+              }
+            } else if (topic === 'device/commands') {
+              const { pump, state } = payload;
+              if (pump !== undefined && state !== undefined) {
+                setPumpsState(prev => ({
+                  ...prev,
+                  [pump]: state === 1
+                }));
+              }
+            }
+          } catch (err) {
+            console.error('Error parsing MQTT message:', err);
+          }
+        });
+
+        client.on('error', (err) => {
+          console.error('MQTT connection error:', err);
+        });
+
+      } catch (err) {
+        console.warn('MQTT WebSockets connection skipped:', err.message);
+        console.log('Real-time updates will fallback to HTTP polling.');
+      }
+    };
+
+    initMqtt();
 
     return () => {
-      console.log('Disconnecting from MQTT WebSockets client...');
-      client.end();
+      active = false;
+      if (client) {
+        console.log('Disconnecting from MQTT WebSockets client...');
+        client.end();
+      }
     };
   }, []);
 
@@ -260,6 +291,7 @@ export default function Dashboard() {
     
     setRefreshing(true);
     const lastMaxTime = getMaxTimestamp(data.latest_readings);
+    showToast('Sending telemetry refresh command to ESP32...', 'info');
     
     try {
       const res = await fetch('/api/refresh', {
@@ -268,6 +300,7 @@ export default function Dashboard() {
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
+          showToast('Refresh command published successfully. Awaiting data...', 'success');
           let attempts = 0;
           const pollInterval = setInterval(async () => {
             attempts++;
@@ -281,6 +314,7 @@ export default function Dashboard() {
                     setData(dashJson);
                     clearInterval(pollInterval);
                     setRefreshing(false);
+                    showToast('Telemetry data updated successfully.', 'success');
                     return;
                   }
                 }
@@ -293,17 +327,21 @@ export default function Dashboard() {
               clearInterval(pollInterval);
               setRefreshing(false);
               fetchDashboardData();
+              showToast('Telemetey refresh timed out. No new data received.', 'warning');
             }
           }, 1000);
         } else {
           console.error('Refresh command rejected:', json.error);
+          showToast(json.error || 'Failed to dispatch refresh command.', 'error');
           setRefreshing(false);
         }
       } else {
+        showToast('Server rejected the refresh command.', 'error');
         setRefreshing(false);
       }
     } catch (err) {
       console.error('Failed to trigger telemetry refresh:', err);
+      showToast('Network error triggering refresh command.', 'error');
       setRefreshing(false);
     }
   };
@@ -330,20 +368,26 @@ export default function Dashboard() {
         const json = await res.json();
         if (json.success) {
           setPumpsState(prev => ({ ...prev, [pumpId]: nextState }));
+          showToast(`${data.pumps.find(p => p.id === pumpId)?.name || 'Pump'} turned ${nextState ? 'ON' : 'OFF'}.`, 'success');
+        } else {
+          showToast(json.error || 'Failed to toggle pump.', 'error');
         }
+      } else {
+        showToast('Server failed to toggle pump.', 'error');
       }
     } catch (err) {
       console.error('Failed to send command:', err);
+      showToast('Network error toggling pump.', 'error');
     } finally {
       setTogglingPumps(prev => ({ ...prev, [pumpId]: false }));
     }
   };
 
   // WiFi Settings Save
-  const handleWifiSave = async () => {
+  const triggerWifiSave = async () => {
     setTogglingConfig(true);
     try {
-      await Promise.all([
+      const results = await Promise.all([
         fetch('/api/config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -355,25 +399,36 @@ export default function Dashboard() {
           body: JSON.stringify({ key: 'wifi_password', value: wifiPassword })
         })
       ]);
-      await fetchDashboardData();
+
+      const jsonResults = await Promise.all(results.map(r => r.json().catch(() => ({ success: false }))));
+      const allSuccess = jsonResults.every(r => r.success);
+
+      if (allSuccess) {
+        showToast('WiFi settings updated successfully.', 'success');
+        await fetchDashboardData();
+      } else {
+        showToast('Failed to save some WiFi configuration parameters.', 'error');
+      }
     } catch (err) {
       console.error('Failed to save WiFi settings:', err);
+      showToast('Error communicating with the configuration server.', 'error');
     } finally {
       setTogglingConfig(false);
     }
   };
 
+  const handleWifiSave = () => {
+    setConfirmDialog({
+      title: 'Update WiFi Settings?',
+      message: 'Warning: Changing the SSID or Password will apply to the ESP32. If they are incorrect, the ESP32 will permanently lose connectivity on its next check-in. Are you sure you want to apply these settings?',
+      confirmLabel: 'Save and Apply',
+      type: 'warning',
+      onConfirm: triggerWifiSave
+    });
+  };
+
   // Telemetry Interval Save
-  const handleCustomIntervalSave = async () => {
-    if (togglingConfig) return;
-    
-    let totalMinutes = parseInt(customInterval, 10);
-    if (isNaN(totalMinutes) || totalMinutes <= 0) return;
-    
-    if (intervalUnit === 'hours') {
-      totalMinutes = totalMinutes * 60;
-    }
-    
+  const triggerCustomIntervalSave = async (totalMinutes) => {
     setTogglingConfig(true);
     try {
       const res = await fetch('/api/config', {
@@ -386,19 +441,47 @@ export default function Dashboard() {
         const json = await res.json();
         if (json.success) {
           setDeviceStatus(prev => ({ ...prev, interval_minutes: totalMinutes }));
+          showToast(`Telemetry update rate set to ${customInterval} ${intervalUnit}.`, 'success');
           await fetchDashboardData();
+        } else {
+          showToast(json.error || 'Failed to update telemetry rate.', 'error');
         }
+      } else {
+        showToast('Server rejected configuration change.', 'error');
       }
     } catch (err) {
       console.error('Failed to save telemetry rate:', err);
+      showToast('Network error updating telemetry rate.', 'error');
     } finally {
       setTogglingConfig(false);
     }
   };
 
+  const handleCustomIntervalSave = () => {
+    let totalMinutes = parseInt(customInterval, 10);
+    if (isNaN(totalMinutes) || totalMinutes <= 0) {
+      showToast('Please enter a valid positive telemetry sleep value.', 'error');
+      return;
+    }
+    if (intervalUnit === 'hours') {
+      totalMinutes = totalMinutes * 60;
+    }
+
+    setConfirmDialog({
+      title: 'Update Telemetry Rate?',
+      message: `Are you sure you want to change the sleep cycle of the ESP32 to run every ${customInterval} ${intervalUnit}? Shorter intervals fetch data quicker but draw more battery power and increase database write operations.`,
+      confirmLabel: 'Update Rate',
+      type: 'info',
+      onConfirm: () => triggerCustomIntervalSave(totalMinutes)
+    });
+  };
+
   // Sensor Add/Edit Save
   const handleSensorSave = async () => {
-    if (!sensorName || !sensorType || sensorPin === undefined) return;
+    if (!sensorName || !sensorType || sensorPin === undefined) {
+      showToast('Please fill in all required sensor configuration fields.', 'error');
+      return;
+    }
     
     try {
       const res = await fetch('/api/sensor', {
@@ -417,6 +500,7 @@ export default function Dashboard() {
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
+          showToast(editingSensorId ? 'Sensor updated successfully.' : 'New sensor added successfully.', 'success');
           setEditingSensorId(null);
           setSensorName('');
           setSensorType('moisture');
@@ -425,28 +509,55 @@ export default function Dashboard() {
           setSensorDryLimit(3400);
           setSensorWetLimit(1100);
           await fetchDashboardData();
+        } else {
+          showToast(json.error || 'Failed to save sensor configuration.', 'error');
         }
+      } else {
+        showToast('Server failed to save sensor.', 'error');
       }
     } catch (err) {
       console.error('Failed to save sensor:', err);
+      showToast('Network error saving sensor.', 'error');
     }
   };
 
-  const handleSensorDelete = async (sensorId) => {
-    if (!confirm('Are you sure you want to delete this sensor config? All its logging history will be removed.')) return;
+  const triggerSensorDelete = async (sensorId) => {
     try {
       const res = await fetch(`/api/sensor?id=${sensorId}`, { method: 'DELETE' });
       if (res.ok) {
-        await fetchDashboardData();
+        const json = await res.json();
+        if (json.success) {
+          showToast('Sensor configuration deleted successfully.', 'success');
+          await fetchDashboardData();
+        } else {
+          showToast(json.error || 'Failed to delete sensor.', 'error');
+        }
+      } else {
+        showToast('Server failed to delete sensor config.', 'error');
       }
     } catch (err) {
       console.error('Failed to delete sensor:', err);
+      showToast('Network error deleting sensor.', 'error');
     }
+  };
+
+  const handleSensorDelete = (sensorId) => {
+    const sensor = data.sensors?.find(s => s.id === sensorId);
+    setConfirmDialog({
+      title: 'Delete Sensor Configuration?',
+      message: `Are you sure you want to delete the sensor "${sensor?.name || 'this sensor'}"? All of its database log history will be permanently deleted. This action is irreversible.`,
+      confirmLabel: 'Delete Sensor',
+      type: 'danger',
+      onConfirm: () => triggerSensorDelete(sensorId)
+    });
   };
 
   // Pump Add/Edit Save
   const handlePumpSave = async () => {
-    if (!pumpName || pumpPin === undefined) return;
+    if (!pumpName || pumpPin === undefined) {
+      showToast('Please fill in all required pump configuration fields.', 'error');
+      return;
+    }
     try {
       const res = await fetch('/api/pump', {
         method: 'POST',
@@ -460,27 +571,52 @@ export default function Dashboard() {
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
+          showToast(editingPumpId ? 'Pump updated successfully.' : 'New pump added successfully.', 'success');
           setEditingPumpId(null);
           setPumpName('');
           setPumpPin(25);
           await fetchDashboardData();
+        } else {
+          showToast(json.error || 'Failed to save pump configuration.', 'error');
         }
+      } else {
+        showToast('Server failed to save pump.', 'error');
       }
     } catch (err) {
       console.error('Failed to save pump:', err);
+      showToast('Network error saving pump.', 'error');
     }
   };
 
-  const handlePumpDelete = async (pumpId) => {
-    if (!confirm('Are you sure you want to delete this pump configuration?')) return;
+  const triggerPumpDelete = async (pumpId) => {
     try {
       const res = await fetch(`/api/pump?id=${pumpId}`, { method: 'DELETE' });
       if (res.ok) {
-        await fetchDashboardData();
+        const json = await res.json();
+        if (json.success) {
+          showToast('Pump configuration deleted successfully.', 'success');
+          await fetchDashboardData();
+        } else {
+          showToast(json.error || 'Failed to delete pump.', 'error');
+        }
+      } else {
+        showToast('Server failed to delete pump config.', 'error');
       }
     } catch (err) {
       console.error('Failed to delete pump:', err);
+      showToast('Network error deleting pump.', 'error');
     }
+  };
+
+  const handlePumpDelete = (pumpId) => {
+    const pump = data.pumps?.find(p => p.id === pumpId);
+    setConfirmDialog({
+      title: 'Delete Pump Configuration?',
+      message: `Are you sure you want to delete the pump "${pump?.name || 'this pump'}"? Dynamic outputs mapped to pin ${pump?.pin || 'its pin'} will be deleted. Past command logs will be retained.`,
+      confirmLabel: 'Delete Pump',
+      type: 'danger',
+      onConfirm: () => triggerPumpDelete(pumpId)
+    });
   };
 
   const renderLastSeenText = () => {
@@ -603,15 +739,6 @@ export default function Dashboard() {
                 Last Report: {renderLastSeenText()}
               </span>
             </div>
-            
-            {/* Main Config Manager Toggle */}
-            <button
-              onClick={() => setIsConfigOpen(true)}
-              className="p-2 border border-zinc-200 rounded-lg hover:bg-zinc-100 transition shadow-sm cursor-pointer bg-white"
-              title="Open Config Manager"
-            >
-              <Settings className="w-4 h-4 text-zinc-600" />
-            </button>
 
             <button
               onClick={handleRefresh}
@@ -774,6 +901,20 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+
+        {/* Footer Settings */}
+        <footer className="flex justify-between items-center text-[10px] text-zinc-400 pt-6 border-t border-zinc-200">
+          <div>
+            <span>Terrace Irrigation Control System Dashboard</span>
+          </div>
+          <button
+            onClick={() => setIsConfigOpen(true)}
+            className="flex items-center gap-1.5 hover:text-zinc-600 transition cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-zinc-500 bg-transparent border-0"
+          >
+            <Settings className="w-3.5 h-3.5" />
+            <span>Configure Panel</span>
+          </button>
+        </footer>
 
       </div>
 
@@ -1135,6 +1276,68 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* Dynamic Confirmation Modal */}
+      {confirmDialog && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl border border-zinc-200 shadow-xl max-w-md w-full p-5 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="space-y-1.5">
+              <h4 className="text-sm font-semibold text-zinc-900">{confirmDialog.title}</h4>
+              <p className="text-xs text-zinc-500 leading-normal">{confirmDialog.message}</p>
+            </div>
+            <div className="flex justify-end gap-2 text-xs pt-1">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 font-semibold px-3 py-1.5 rounded-lg cursor-pointer transition active:scale-95"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  confirmDialog.onConfirm();
+                  setConfirmDialog(null);
+                }}
+                className={`text-white font-semibold px-3 py-1.5 rounded-lg cursor-pointer transition active:scale-95 ${
+                  confirmDialog.type === 'danger'
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : confirmDialog.type === 'warning'
+                    ? 'bg-amber-600 hover:bg-amber-700'
+                    : 'bg-zinc-900 hover:bg-zinc-800'
+                }`}
+              >
+                {confirmDialog.confirmLabel || 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notification Container */}
+      <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`pointer-events-auto flex items-center gap-3 px-4 py-3 bg-white border rounded-xl shadow-lg transition-all duration-300 animate-in fade-in slide-in-from-bottom-2 ${
+              toast.type === 'error'
+                ? 'border-red-100 text-red-800'
+                : toast.type === 'warning'
+                ? 'border-amber-100 text-amber-800'
+                : 'border-zinc-200 text-zinc-800'
+            }`}
+          >
+            {toast.type === 'success' && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+            )}
+            {toast.type === 'error' && (
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
+            )}
+            {toast.type === 'warning' && (
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+            )}
+            <span className="text-xs font-medium">{toast.message}</span>
+          </div>
+        ))}
+      </div>
 
     </div>
   );

@@ -52,9 +52,9 @@ export async function POST(request) {
   }
 
   const parsedPump = Number(pump);
-  if (pump === undefined || !Number.isInteger(parsedPump) || parsedPump < 1 || parsedPump > 4) {
+  if (pump === undefined || !Number.isInteger(parsedPump) || parsedPump < 1) {
     return NextResponse.json(
-      { success: false, error: 'Invalid "pump" value. It must be an integer between 1 and 4.' },
+      { success: false, error: 'Invalid "pump" value. It must be a valid positive integer.' },
       { status: 400 }
     );
   }
@@ -68,6 +68,26 @@ export async function POST(request) {
   }
 
   const sql = getDb();
+
+  // Validate that the pump actually exists in database configuration
+  try {
+    const pumpRecord = await sql`
+      SELECT id FROM pump_configs WHERE id = ${parsedPump}
+    `;
+    if (pumpRecord.length === 0) {
+      return NextResponse.json(
+        { success: false, error: `Invalid "pump" value. Pump ID ${parsedPump} does not exist in configuration.` },
+        { status: 400 }
+      );
+    }
+  } catch (dbErr) {
+    console.error('Failed to verify pump existence in database:', dbErr);
+    return NextResponse.json(
+      { success: false, error: 'Failed to verify pump configuration from database.', details: dbErr.message },
+      { status: 500 }
+    );
+  }
+
   let status = 'failed';
   let messageId = null;
   let errorDetails = null;
@@ -111,13 +131,21 @@ export async function POST(request) {
     status = 'success';
     messageId = result.id || null;
 
-    await sql`
-      INSERT INTO command_logs (pump, state, status, response_msg_id)
-      VALUES (${parsedPump}, ${parsedState}, ${status}, ${messageId})
-    `;
+    // Concurrently update pump state and log command execution status
+    await Promise.all([
+      sql`
+        UPDATE pump_configs
+        SET state = ${parsedState}
+        WHERE id = ${parsedPump}
+      `,
+      sql`
+        INSERT INTO command_logs (pump, state, status, response_msg_id)
+        VALUES (${parsedPump}, ${parsedState}, ${status}, ${messageId})
+      `
+    ]);
 
     return NextResponse.json(
-      { success: true, message: 'Command successfully published and logged.', messageId: messageId },
+      { success: true, message: 'Command successfully published, state updated, and logged.', messageId: messageId },
       { status: 200 }
     );
   } catch (error) {

@@ -15,19 +15,6 @@ CREATE TABLE IF NOT EXISTS sensor_logs (
 CREATE INDEX IF NOT EXISTS idx_sensor_logs_device_created ON sensor_logs (device_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sensor_logs_created ON sensor_logs (created_at DESC);
 
--- Table for historical tracking of issued control commands
-CREATE TABLE IF NOT EXISTS command_logs (
-    id SERIAL PRIMARY KEY,
-    pump INT NOT NULL CHECK (pump BETWEEN 1 AND 4),
-    state INT NOT NULL CHECK (state IN (0, 1)),
-    status VARCHAR(20) NOT NULL,     -- 'success' or 'failed'
-    response_msg_id VARCHAR(100),    -- EMQX message ID on success
-    error_details TEXT,              -- Detailed error if publish failed
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_command_logs_created ON command_logs (created_at DESC);
-
 -- Table for system configuration settings (shared between ESP32 and dashboard)
 CREATE TABLE IF NOT EXISTS system_config (
     key VARCHAR(50) PRIMARY KEY,
@@ -117,6 +104,19 @@ VALUES
     (3, 'Pump 3', 27, 0),
     (4, 'Pump 4', 14, 0)
 ON CONFLICT (id) DO NOTHING;
+
+-- Table for historical tracking of issued control commands
+CREATE TABLE IF NOT EXISTS command_logs (
+    id SERIAL PRIMARY KEY,
+    pump INT NOT NULL REFERENCES pump_configs(id) ON DELETE CASCADE,
+    state INT NOT NULL CHECK (state IN (0, 1)),
+    status VARCHAR(20) NOT NULL,     -- 'success' or 'failed'
+    response_msg_id VARCHAR(100),    -- EMQX message ID on success
+    error_details TEXT,              -- Detailed error if publish failed
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_command_logs_created ON command_logs (created_at DESC);
 
 -- 3. Table for relational sensor readings logs
 CREATE TABLE IF NOT EXISTS sensor_readings (

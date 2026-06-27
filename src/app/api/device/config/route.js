@@ -27,6 +27,11 @@ export async function GET() {
       configMap[cfg.key] = cfg.value;
     });
 
+    if (configMap['wifi_password']) {
+      const { decrypt } = await import('@/lib/crypto');
+      configMap['wifi_password'] = decrypt(configMap['wifi_password']);
+    }
+
     const responsePayload = {
       success: true,
       wifi_ssid: configMap['wifi_ssid'] || 'TerraceWiFi',

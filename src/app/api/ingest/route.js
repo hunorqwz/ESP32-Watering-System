@@ -85,16 +85,18 @@ export async function POST(request) {
       );
     }
 
-    // Insert all readings into the relational sensor_readings table
+    // Batch insert all readings into the relational sensor_readings table in a single query
     if (processedReadings.length > 0) {
-      await Promise.all(
-        processedReadings.map(reading => 
-          sql`
-            INSERT INTO sensor_readings (sensor_config_id, value, created_at)
-            VALUES (${reading.sensor_config_id}, ${reading.value}, ${timestamp})
-          `
-        )
-      );
+      const sensorIds = processedReadings.map(r => r.sensor_config_id);
+      const values = processedReadings.map(r => r.value);
+      await sql`
+        INSERT INTO sensor_readings (sensor_config_id, value, created_at)
+        SELECT u.sensor_id, u.val, ${timestamp}::timestamptz
+        FROM (
+          SELECT unnest(${sensorIds}::int[]) as sensor_id, unnest(${values}::real[]) as val
+        ) u
+        WHERE u.sensor_id IN (SELECT id FROM sensor_configs)
+      `;
     }
 
     // Fetch current telemetry configuration to return to ESP32
