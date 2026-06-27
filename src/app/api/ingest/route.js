@@ -11,12 +11,24 @@ export async function POST(request) {
     );
   }
 
+  const rawBody = await request.text();
+  console.log('--- INCOMING TELEMETRY RAW BODY ---');
+  console.log(rawBody);
+  console.log('------------------------------------');
+  try {
+    const fs = await import('fs');
+    fs.appendFileSync('ingest_debug.log', `${new Date().toISOString()} - RAW: ${rawBody}\n`);
+  } catch (err) {
+    console.error('Failed to write ingest_debug.log:', err.message);
+  }
+
   let payload;
   try {
-    payload = await request.json();
+    payload = JSON.parse(rawBody);
   } catch (e) {
+    console.error('Ingest JSON parsing failed:', e.message, 'Raw body was:', rawBody);
     return NextResponse.json(
-      { success: false, error: 'Invalid JSON payload.' },
+      { success: false, error: 'Invalid JSON payload.', details: e.message },
       { status: 400 }
     );
   }
