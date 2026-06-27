@@ -50,7 +50,7 @@ async function initializeDatabase() {
     
     for (const query of queries) {
       console.log(`Executing statement: ${query.split('\n')[0]}...`);
-      await sql(query);
+      await sql.query(query);
     }
     
     console.log('Database initialization completed successfully.');

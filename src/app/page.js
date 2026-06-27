@@ -37,6 +37,12 @@ export default function Dashboard() {
   const [customInterval, setCustomInterval] = useState(15);
   const [intervalUnit, setIntervalUnit] = useState('minutes');
 
+  // Reservoir calibration forms
+  const [reservoirUseDimensions, setReservoirUseDimensions] = useState(false);
+  const [reservoirTotalVolume, setReservoirTotalVolume] = useState(100);
+  const [reservoirWidth, setReservoirWidth] = useState(60);
+  const [reservoirLength, setReservoirLength] = useState(70);
+
   // Sensor Form
   const [editingSensorId, setEditingSensorId] = useState(null);
   const [sensorName, setSensorName] = useState('');
@@ -78,6 +84,10 @@ export default function Dashboard() {
           if (json.configs) {
             setWifiSsid(json.configs['wifi_ssid'] || '');
             setWifiPassword(json.configs['wifi_password'] || '');
+            setReservoirUseDimensions(json.configs['reservoir_use_dimensions'] === 'true');
+            setReservoirTotalVolume(json.configs['reservoir_total_volume_liters'] ? Number(json.configs['reservoir_total_volume_liters']) : 100);
+            setReservoirWidth(json.configs['reservoir_width_cm'] ? Number(json.configs['reservoir_width_cm']) : 60);
+            setReservoirLength(json.configs['reservoir_length_cm'] ? Number(json.configs['reservoir_length_cm']) : 70);
           }
 
           // Sync last report time from latest reading timestamps
@@ -186,7 +196,7 @@ export default function Dashboard() {
 
         if (!active) return; // Prevent connecting if component unmounted while fetching
 
-        const brokerUrl = 'wss://bcc1fdaf.ala.eu-central-1.emqxsl.com:8084/mqtt';
+        const brokerUrl = authData.brokerUrl || 'wss://bcc1fdaf.ala.eu-central-1.emqxsl.com:8084/mqtt';
         console.log('Connecting to EMQX broker via WebSockets...');
         client = mqtt.connect(brokerUrl, {
           username: authData.username,
@@ -490,6 +500,64 @@ export default function Dashboard() {
       type: 'info',
       onConfirm: () => triggerCustomIntervalSave(totalMinutes)
     });
+  };
+
+  const handleReservoirSave = async () => {
+    if (reservoirUseDimensions) {
+      if (isNaN(reservoirWidth) || reservoirWidth <= 0) {
+        showToast('Please enter a valid positive number for tank width.', 'error');
+        return;
+      }
+      if (isNaN(reservoirLength) || reservoirLength <= 0) {
+        showToast('Please enter a valid positive number for tank length.', 'error');
+        return;
+      }
+    } else {
+      if (isNaN(reservoirTotalVolume) || reservoirTotalVolume <= 0) {
+        showToast('Please enter a valid positive number for total volume.', 'error');
+        return;
+      }
+    }
+    setTogglingConfig(true);
+    try {
+      const results = await Promise.all([
+        fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: 'reservoir_use_dimensions', value: String(reservoirUseDimensions) })
+        }),
+        fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: 'reservoir_total_volume_liters', value: String(reservoirTotalVolume) })
+        }),
+        fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: 'reservoir_width_cm', value: String(reservoirWidth) })
+        }),
+        fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: 'reservoir_length_cm', value: String(reservoirLength) })
+        })
+      ]);
+
+      const jsonResults = await Promise.all(results.map(r => r.json().catch(() => ({ success: false }))));
+      const allSuccess = jsonResults.every(r => r.success);
+
+      if (allSuccess) {
+        showToast('Reservoir configurations updated successfully.', 'success');
+        await fetchDashboardData();
+      } else {
+        showToast('Failed to save some reservoir config parameters.', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to save reservoir settings:', err);
+      showToast('Error communicating with the configuration server.', 'error');
+    } finally {
+      setTogglingConfig(false);
+    }
   };
 
   // Sensor Add/Edit Save
@@ -1272,6 +1340,67 @@ export default function Dashboard() {
                           Save Interval
                         </button>
                       </div>
+                    </div>
+
+                    <div className="space-y-4 pt-4 border-t border-zinc-100">
+                      <h5 className="font-bold text-zinc-700 text-xs uppercase tracking-wider">Water Reservoir Calibration</h5>
+                      
+                      <div className="flex items-center gap-2 py-1">
+                        <input
+                          id="reservoir-use-dims"
+                          type="checkbox"
+                          checked={reservoirUseDimensions}
+                          onChange={(e) => setReservoirUseDimensions(e.target.checked)}
+                          className="rounded text-blue-600 focus:ring-blue-500 border-zinc-300 w-4 h-4 cursor-pointer"
+                        />
+                        <label htmlFor="reservoir-use-dims" className="text-xs text-zinc-700 font-semibold cursor-pointer">
+                          Calculate Volume using Tank Dimensions
+                        </label>
+                      </div>
+
+                      {reservoirUseDimensions ? (
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Width (cm)</label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={reservoirWidth}
+                              onChange={(e) => setReservoirWidth(Number(e.target.value))}
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Length (cm)</label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={reservoirLength}
+                              onChange={(e) => setReservoirLength(Number(e.target.value))}
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Total Volume Capacity (Liters)</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={reservoirTotalVolume}
+                            onChange={(e) => setReservoirTotalVolume(Number(e.target.value))}
+                            className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                          />
+                        </div>
+                      )}
+
+                      <button
+                        onClick={handleReservoirSave}
+                        disabled={togglingConfig}
+                        className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50 animate-in fade-in zoom-in-95 duration-100"
+                      >
+                        Save Reservoir Settings
+                      </button>
                     </div>
                   </div>
                 )}

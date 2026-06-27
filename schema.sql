@@ -34,26 +34,9 @@ VALUES
     ('wifi_password', 'secretPassword')
 ON CONFLICT (key) DO NOTHING;
 
--- Seed default soil moisture calibration values (1100 for Wet, 3400 for Dry)
+-- Seed default reservoir calibration values (capacity = 100L, dimensions = 60x70)
 INSERT INTO system_config (key, value)
 VALUES 
-    ('sensor_m1_dry', '3400'),
-    ('sensor_m1_wet', '1100'),
-    ('sensor_m2_dry', '3400'),
-    ('sensor_m2_wet', '1100'),
-    ('sensor_m3_dry', '3400'),
-    ('sensor_m3_wet', '1100'),
-    ('sensor_m4_dry', '3400'),
-    ('sensor_m4_wet', '1100'),
-    ('sensor_m5_dry', '3400'),
-    ('sensor_m5_wet', '1100')
-ON CONFLICT (key) DO NOTHING;
-
--- Seed default reservoir calibration values (empty = 100cm, full = 10cm, capacity = 100L, dimensions = 60x70)
-INSERT INTO system_config (key, value)
-VALUES 
-    ('reservoir_empty_distance_cm', '100'),
-    ('reservoir_full_distance_cm', '0'),
     ('reservoir_use_dimensions', 'false'),
     ('reservoir_total_volume_liters', '100'),
     ('reservoir_width_cm', '60'),
@@ -128,3 +111,7 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
 
 CREATE INDEX IF NOT EXISTS idx_sensor_readings_config_created ON sensor_readings (sensor_config_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sensor_readings_created ON sensor_readings (created_at DESC);
+
+-- Sync sequence values to prevent duplicate key constraint violations on insert
+SELECT setval(pg_get_serial_sequence('sensor_configs', 'id'), COALESCE(max(id), 1)) FROM sensor_configs;
+SELECT setval(pg_get_serial_sequence('pump_configs', 'id'), COALESCE(max(id), 1)) FROM pump_configs;

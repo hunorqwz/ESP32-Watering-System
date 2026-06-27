@@ -6,7 +6,7 @@ export async function GET() {
     const sql = getDb();
 
     // Fetch all metadata configs, latest values, commands, and system configs concurrently
-    const [sensors, pumps, latestReadings, recentReadings, commands, configs] = await Promise.all([
+    const [sensors, pumps, latestReadings, commands, configs] = await Promise.all([
       // 1. Fetch sensor configurations
       sql`
         SELECT * FROM sensor_configs 
@@ -24,22 +24,13 @@ export async function GET() {
         FROM sensor_readings 
         ORDER BY sensor_config_id, created_at DESC
       `,
-      // 4. Fetch the last 150 readings for historical charts
-      sql`
-        SELECT * FROM (
-          SELECT * FROM sensor_readings 
-          ORDER BY created_at DESC 
-          LIMIT 150
-        ) sub
-        ORDER BY created_at ASC
-      `,
-      // 5. Fetch the last 10 control command executions
+      // 4. Fetch the last 10 control command executions
       sql`
         SELECT * FROM command_logs 
         ORDER BY created_at DESC 
         LIMIT 10
       `,
-      // 6. Fetch all system configurations
+      // 5. Fetch all system configurations
       sql`
         SELECT key, value FROM system_config
       `
@@ -99,7 +90,7 @@ export async function GET() {
       sensors: sensors,
       pumps: pumps,
       latest_readings: latestReadingsMap,
-      history_readings: recentReadings,
+      history_readings: [],
       commands: commands,
       device_status: deviceStatus,
       configs: configMap
