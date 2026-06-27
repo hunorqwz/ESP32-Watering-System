@@ -30,6 +30,7 @@ export default function Dashboard() {
   const [isCalibrateOpen, setIsCalibrateOpen] = useState(false);
   const [tempConfigs, setTempConfigs] = useState({});
   const [isReservoirOpen, setIsReservoirOpen] = useState(false);
+  const [lastReportTime, setLastReportTime] = useState(null);
 
   const fetchDashboardData = async () => {
     try {
@@ -40,6 +41,9 @@ export default function Dashboard() {
           setData({ current: json.current });
           setConnected(true);
           
+          if (json.current && json.current.created_at) {
+            setLastReportTime(new Date(json.current.created_at).getTime());
+          }
           if (json.device_status) {
             setDeviceStatus(json.device_status);
           }
@@ -92,7 +96,6 @@ export default function Dashboard() {
           if (registrations.length > 0) {
             Promise.all(registrations.map(r => r.unregister())).then(() => {
               console.log('Cleared active service workers in development mode.');
-              window.location.reload();
             });
           }
         });
@@ -101,6 +104,25 @@ export default function Dashboard() {
 
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!lastReportTime) return;
+
+    const updateElapsed = () => {
+      const elapsed = Math.max(0, Math.floor((Date.now() - lastReportTime) / 1000));
+      const thresholdSeconds = (deviceStatus.interval_minutes + 2) * 60;
+
+      setDeviceStatus(prev => ({
+        ...prev,
+        last_seen_seconds: elapsed,
+        active: elapsed <= thresholdSeconds
+      }));
+    };
+
+    updateElapsed();
+    const timer = setInterval(updateElapsed, 1000);
+    return () => clearInterval(timer);
+  }, [lastReportTime, deviceStatus.interval_minutes]);
 
   const handlePumpToggle = async (pumpId) => {
     if (togglingPumps[pumpId]) return;

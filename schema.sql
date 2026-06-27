@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS sensor_logs (
 -- Index for fast queries ordered by latest telemetry data
 CREATE INDEX IF NOT EXISTS idx_sensor_logs_device_created ON sensor_logs (device_id, created_at DESC);
 
+-- Index for fast sorting of all logs by timestamp (global dashboard queries)
+CREATE INDEX IF NOT EXISTS idx_sensor_logs_created ON sensor_logs (created_at DESC);
+
 -- Table for historical tracking of issued control commands
 CREATE TABLE IF NOT EXISTS command_logs (
     id SERIAL PRIMARY KEY,

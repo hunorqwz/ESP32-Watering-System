@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import handler from '../api/command.js';
 
 // Setup/Load .env file manually
 try {
@@ -24,54 +23,41 @@ try {
   console.warn('Could not read .env file:', err);
 }
 
-// Setup Mock Request with a command payload
-const mockRequest = {
-  method: 'POST',
-  body: {
-    pump: 2,
-    state: 1
-  }
-};
-
-// Setup Mock Response
-const mockResponse = {
-  statusCode: 200,
-  headers: {},
-  setHeader(name, value) {
-    this.headers[name] = value;
-    return this;
-  },
-  status(code) {
-    this.statusCode = code;
-    return this;
-  },
-  json(data) {
-    this.body = data;
-    return this;
-  }
-};
+const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
 async function runTest() {
-  console.log('Starting mock command payload test to api/command handler...');
-  console.log('Payload:', JSON.stringify(mockRequest.body, null, 2));
+  console.log('Starting integration test to api/command endpoint...');
+  const payload = {
+    pump: 2,
+    state: 1
+  };
+  console.log('Payload:', JSON.stringify(payload, null, 2));
 
-  if (!process.env.EMQX_API_URL || !process.env.EMQX_API_KEY || !process.env.EMQX_API_SECRET) {
-    console.error('Test skipped/failed: EMQX REST API variables are not set in .env.');
-    console.log('Ensure you have defined EMQX_API_URL, EMQX_API_KEY, and EMQX_API_SECRET.');
-    process.exit(1);
-  }
+  try {
+    const response = await fetch(`${baseUrl}/api/command`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10000)
+    });
 
-  // Execute the serverless function handler
-  await handler(mockRequest, mockResponse);
+    const body = await response.json().catch(() => ({}));
 
-  console.log('\n--- Test Result ---');
-  console.log('Response Status Code:', mockResponse.statusCode);
-  console.log('Response Body:', JSON.stringify(mockResponse.body, null, 2));
+    console.log('\n--- Test Result ---');
+    console.log('Response Status Code:', response.status);
+    console.log('Response Body:', JSON.stringify(body, null, 2));
 
-  if (mockResponse.statusCode === 200 && mockResponse.body?.success) {
-    console.log('\nSUCCESS: Command successfully sent and published via EMQX REST API!');
-  } else {
-    console.error('\nFAILURE: Command publishing failed.');
+    if (response.ok && body.success) {
+      console.log('\nSUCCESS: Command successfully sent and published via API!');
+    } else {
+      console.error('\nFAILURE: Command publishing failed or was rejected.');
+      process.exit(1);
+    }
+  } catch (error) {
+    console.error('\nFAILURE: Could not connect to Next.js API server.', error.message);
+    console.log(`Ensure that the Next.js development server is running at ${baseUrl}`);
     process.exit(1);
   }
 }
