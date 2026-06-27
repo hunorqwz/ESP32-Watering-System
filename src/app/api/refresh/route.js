@@ -8,7 +8,11 @@ function getEmqxConfig(apiUrl, apiKey, apiSecret) {
     cachedAuthHeader = 'Basic ' + Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
   }
   if (!cachedPublishUrl) {
-    cachedPublishUrl = apiUrl.replace(/\/$/, '') + '/api/v5/publish';
+    let cleanUrl = apiUrl.replace(/\/$/, '');
+    if (cleanUrl.endsWith('/api/v5')) {
+      cleanUrl = cleanUrl.slice(0, -7);
+    }
+    cachedPublishUrl = cleanUrl + '/api/v5/publish';
   }
   return { authHeader: cachedAuthHeader, publishUrl: cachedPublishUrl };
 }

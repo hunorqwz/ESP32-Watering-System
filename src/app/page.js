@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import mqtt from 'mqtt';
 import { Cylinder, Thermometer, Droplets, Sprout, RefreshCw, Settings, X, Plus, Trash2, Edit2, Wifi } from 'lucide-react';
 
 export default function Dashboard() {
+  const refreshIntervalRef = useRef(null);
   const [data, setData] = useState({
     sensors: [],
     pumps: [],
@@ -159,6 +160,10 @@ export default function Dashboard() {
 
     return () => {
       if (interval) clearInterval(interval);
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+        refreshIntervalRef.current = null;
+      }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
@@ -289,6 +294,11 @@ export default function Dashboard() {
   const handleRefresh = async () => {
     if (refreshing) return;
     
+    if (refreshIntervalRef.current) {
+      clearInterval(refreshIntervalRef.current);
+      refreshIntervalRef.current = null;
+    }
+    
     setRefreshing(true);
     const lastMaxTime = getMaxTimestamp(data.latest_readings);
     showToast('Sending telemetry refresh command to ESP32...', 'info');
@@ -302,7 +312,7 @@ export default function Dashboard() {
         if (json.success) {
           showToast('Refresh command published successfully. Awaiting data...', 'success');
           let attempts = 0;
-          const pollInterval = setInterval(async () => {
+          refreshIntervalRef.current = setInterval(async () => {
             attempts++;
             try {
               const dashRes = await fetch('/api/dashboard');
@@ -312,7 +322,10 @@ export default function Dashboard() {
                   const newMaxTime = getMaxTimestamp(dashJson.latest_readings);
                   if (newMaxTime !== lastMaxTime) {
                     setData(dashJson);
-                    clearInterval(pollInterval);
+                    if (refreshIntervalRef.current) {
+                      clearInterval(refreshIntervalRef.current);
+                      refreshIntervalRef.current = null;
+                    }
                     setRefreshing(false);
                     showToast('Telemetry data updated successfully.', 'success');
                     return;
@@ -324,10 +337,13 @@ export default function Dashboard() {
             }
             
             if (attempts >= 8) {
-              clearInterval(pollInterval);
+              if (refreshIntervalRef.current) {
+                clearInterval(refreshIntervalRef.current);
+                refreshIntervalRef.current = null;
+              }
               setRefreshing(false);
               fetchDashboardData();
-              showToast('Telemetey refresh timed out. No new data received.', 'warning');
+              showToast('Telemetry refresh timed out. No new data received.', 'warning');
             }
           }, 1000);
         } else {
@@ -743,7 +759,7 @@ export default function Dashboard() {
             <button
               onClick={handleRefresh}
               disabled={refreshing || !connected}
-              className="flex items-center gap-1.5 bg-white border border-zinc-200 hover:border-zinc-300 text-zinc-700 hover:text-zinc-900 disabled:opacity-50 disabled:cursor-not-allowed transitionpx-3 py-1.5 text-xs font-semibold rounded-lg shadow-sm active:scale-95 disabled:active:scale-100 cursor-pointer"
+              className="flex items-center gap-1.5 bg-white border border-zinc-200 hover:border-zinc-300 text-zinc-700 hover:text-zinc-900 disabled:opacity-50 disabled:cursor-not-allowed transition px-3 py-1.5 text-xs font-semibold rounded-lg shadow-sm active:scale-95 disabled:active:scale-100 cursor-pointer"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} strokeWidth={2.2} />
               <span>{refreshing ? 'Refreshing...' : 'Refresh'}</span>
