@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS sensor_configs (
     name VARCHAR(100) NOT NULL,
     type VARCHAR(50) NOT NULL,            -- 'moisture', 'temperature', 'humidity', 'water_level'
     pin INT NOT NULL,
+    pin_secondary INT,                    -- Secondary pin (e.g. Echo pin for ultrasonic sensor)
     sensor_group VARCHAR(100) NOT NULL,
     dry_limit INT DEFAULT 3400,           -- Analog limit for dry soil/empty tank
     wet_limit INT DEFAULT 1100,           -- Analog limit for wet soil/full tank
@@ -58,16 +59,16 @@ CREATE TABLE IF NOT EXISTS sensor_configs (
 );
 
 -- Seed default sensors into metadata configurations
-INSERT INTO sensor_configs (id, name, type, pin, sensor_group, dry_limit, wet_limit)
+INSERT INTO sensor_configs (id, name, type, pin, pin_secondary, sensor_group, dry_limit, wet_limit)
 VALUES 
-    (1, 'Zone 1', 'moisture', 32, 'Soil Moisture', 3400, 1100),
-    (2, 'Zone 2', 'moisture', 33, 'Soil Moisture', 3400, 1100),
-    (3, 'Zone 3', 'moisture', 34, 'Soil Moisture', 3400, 1100),
-    (4, 'Zone 4', 'moisture', 35, 'Soil Moisture', 3400, 1100),
-    (5, 'Zone 5', 'moisture', 36, 'Soil Moisture', 3400, 1100),
-    (6, 'Ambient Temp', 'temperature', 4, 'Environment', NULL, NULL),
-    (7, 'Ambient Humidity', 'humidity', 4, 'Environment', NULL, NULL),
-    (8, 'Reservoir Level', 'water_level', 27, 'Reservoir', 100, 0)
+    (1, 'Zone 1', 'moisture', 32, NULL, 'Soil Moisture', 3400, 1100),
+    (2, 'Zone 2', 'moisture', 33, NULL, 'Soil Moisture', 3400, 1100),
+    (3, 'Zone 3', 'moisture', 34, NULL, 'Soil Moisture', 3400, 1100),
+    (4, 'Zone 4', 'moisture', 35, NULL, 'Soil Moisture', 3400, 1100),
+    (5, 'Zone 5', 'moisture', 36, NULL, 'Soil Moisture', 3400, 1100),
+    (6, 'Ambient Temp', 'temperature', 4, NULL, 'Environment', NULL, NULL),
+    (7, 'Ambient Humidity', 'humidity', 4, NULL, 'Environment', NULL, NULL),
+    (8, 'Reservoir Level', 'water_level', 14, 27, 'Reservoir', 100, 0)
 ON CONFLICT (id) DO NOTHING;
 
 -- 2. Table for dynamic pump configurations
@@ -91,7 +92,7 @@ ON CONFLICT (id) DO NOTHING;
 -- Table for historical tracking of issued control commands
 CREATE TABLE IF NOT EXISTS command_logs (
     id SERIAL PRIMARY KEY,
-    pump INT NOT NULL REFERENCES pump_configs(id) ON DELETE CASCADE,
+    pump INT REFERENCES pump_configs(id) ON DELETE SET NULL,
     state INT NOT NULL CHECK (state IN (0, 1)),
     status VARCHAR(20) NOT NULL,     -- 'success' or 'failed'
     response_msg_id VARCHAR(100),    -- EMQX message ID on success

@@ -1,11 +1,57 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 
+let cachedAuthHeader = null;
+let cachedPublishUrl = null;
+
+function getEmqxConfig(apiUrl, apiKey, apiSecret) {
+  if (!cachedAuthHeader) {
+    cachedAuthHeader = 'Basic ' + Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
+  }
+  if (!cachedPublishUrl) {
+    let cleanUrl = apiUrl.replace(/\/$/, '');
+    if (cleanUrl.endsWith('/api/v5')) {
+      cleanUrl = cleanUrl.slice(0, -7);
+    }
+    cachedPublishUrl = cleanUrl + '/api/v5/publish';
+  }
+  return { authHeader: cachedAuthHeader, publishUrl: cachedPublishUrl };
+}
+
+async function triggerReload() {
+  const apiUrl = process.env.EMQX_API_URL;
+  const apiKey = process.env.EMQX_API_KEY;
+  const apiSecret = process.env.EMQX_API_SECRET;
+
+  if (apiUrl && apiKey && apiSecret) {
+    try {
+      const { authHeader, publishUrl } = getEmqxConfig(apiUrl, apiKey, apiSecret);
+      await fetch(publishUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': authHeader,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          topic: 'device/commands',
+          qos: 1,
+          payload: JSON.stringify({ action: 'reload_config' }),
+          payload_encoding: 'plain'
+        }),
+        signal: AbortSignal.timeout(4000)
+      });
+      console.log('Successfully published reload_config command via MQTT.');
+    } catch (err) {
+      console.error('Failed to publish reload_config command:', err.message);
+    }
+  }
+}
+
 // Create or Update Sensor
 export async function POST(request) {
   try {
     const payload = await request.json();
-    const { id, name, type, pin, sensor_group, dry_limit, wet_limit } = payload || {};
+    const { id, name, type, pin, pin_secondary, sensor_group, dry_limit, wet_limit } = payload || {};
 
     if (!name || !type || pin === undefined || !sensor_group) {
       return NextResponse.json(
@@ -23,6 +69,9 @@ export async function POST(request) {
       );
     }
 
+    const parsedPinSecondary = pin_secondary !== undefined && pin_secondary !== null && String(pin_secondary).trim() !== '' ? parseInt(pin_secondary, 10) : null;
+    const pinSecondary = isNaN(parsedPinSecondary) ? null : parsedPinSecondary;
+
     const dryVal = dry_limit !== undefined && dry_limit !== null && String(dry_limit).trim() !== '' ? parseInt(dry_limit, 10) : null;
     const wetVal = wet_limit !== undefined && wet_limit !== null && String(wet_limit).trim() !== '' ? parseInt(wet_limit, 10) : null;
     const dry = isNaN(dryVal) ? null : dryVal;
@@ -32,16 +81,18 @@ export async function POST(request) {
       // Update existing sensor config
       await sql`
         UPDATE sensor_configs 
-        SET name = ${name}, type = ${type}, pin = ${parsedPin}, sensor_group = ${sensor_group}, dry_limit = ${dry}, wet_limit = ${wet}
+        SET name = ${name}, type = ${type}, pin = ${parsedPin}, pin_secondary = ${pinSecondary}, sensor_group = ${sensor_group}, dry_limit = ${dry}, wet_limit = ${wet}
         WHERE id = ${parseInt(id, 10)}
       `;
+      await triggerReload();
       return NextResponse.json({ success: true, message: 'Sensor configuration updated successfully.' });
     } else {
       // Insert new sensor config
       await sql`
-        INSERT INTO sensor_configs (name, type, pin, sensor_group, dry_limit, wet_limit)
-        VALUES (${name}, ${type}, ${parsedPin}, ${sensor_group}, ${dry}, ${wet})
+        INSERT INTO sensor_configs (name, type, pin, pin_secondary, sensor_group, dry_limit, wet_limit)
+        VALUES (${name}, ${type}, ${parsedPin}, ${pinSecondary}, ${sensor_group}, ${dry}, ${wet})
       `;
+      await triggerReload();
       return NextResponse.json({ success: true, message: 'Sensor added successfully.' });
     }
   } catch (error) {
@@ -72,6 +123,7 @@ export async function DELETE(request) {
       WHERE id = ${parseInt(id, 10)}
     `;
 
+    await triggerReload();
     return NextResponse.json({ success: true, message: 'Sensor configuration deleted successfully.' });
   } catch (error) {
     console.error('Failed to delete sensor configuration:', error);

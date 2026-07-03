@@ -1,6 +1,23 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 
+let cachedAuthHeader = null;
+let cachedPublishUrl = null;
+
+function getEmqxConfig(apiUrl, apiKey, apiSecret) {
+  if (!cachedAuthHeader) {
+    cachedAuthHeader = 'Basic ' + Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
+  }
+  if (!cachedPublishUrl) {
+    let cleanUrl = apiUrl.replace(/\/$/, '');
+    if (cleanUrl.endsWith('/api/v5')) {
+      cleanUrl = cleanUrl.slice(0, -7);
+    }
+    cachedPublishUrl = cleanUrl + '/api/v5/publish';
+  }
+  return { authHeader: cachedAuthHeader, publishUrl: cachedPublishUrl };
+}
+
 export async function POST(request) {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
@@ -33,7 +50,8 @@ export async function POST(request) {
     );
   }
 
-  const { deviceId, readings, m1, m2, m3, m4, m5, temp, hum, waterLevel } = payload || {};
+  const { deviceId, readings, m1, m2, m3, m4, m5, temp, hum, waterLevel, water_level } = payload || {};
+  const finalWaterLevel = waterLevel !== undefined ? waterLevel : water_level;
 
   if (!deviceId) {
     return NextResponse.json(
@@ -68,7 +86,7 @@ export async function POST(request) {
         m5: Number(m5 || 0),
         temp: temp !== undefined && temp !== null ? Number(temp) : null,
         hum: hum !== undefined && hum !== null ? Number(hum) : null,
-        water_level: waterLevel !== undefined && waterLevel !== null ? Number(waterLevel) : null
+        water_level: finalWaterLevel !== undefined && finalWaterLevel !== null ? Number(finalWaterLevel) : null
       };
 
       // Write to legacy sensor_logs table to support legacy tools
@@ -137,12 +155,7 @@ export async function POST(request) {
 
     if (apiUrl && apiKey && apiSecret) {
       try {
-        const authHeader = 'Basic ' + Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
-        let cleanUrl = apiUrl.replace(/\/$/, '');
-        if (cleanUrl.endsWith('/api/v5')) {
-          cleanUrl = cleanUrl.slice(0, -7);
-        }
-        const publishUrl = cleanUrl + '/api/v5/publish';
+        const { authHeader, publishUrl } = getEmqxConfig(apiUrl, apiKey, apiSecret);
 
         await fetch(publishUrl, {
           method: 'POST',

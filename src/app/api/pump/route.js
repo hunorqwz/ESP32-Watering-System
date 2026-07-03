@@ -1,6 +1,52 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 
+let cachedAuthHeader = null;
+let cachedPublishUrl = null;
+
+function getEmqxConfig(apiUrl, apiKey, apiSecret) {
+  if (!cachedAuthHeader) {
+    cachedAuthHeader = 'Basic ' + Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
+  }
+  if (!cachedPublishUrl) {
+    let cleanUrl = apiUrl.replace(/\/$/, '');
+    if (cleanUrl.endsWith('/api/v5')) {
+      cleanUrl = cleanUrl.slice(0, -7);
+    }
+    cachedPublishUrl = cleanUrl + '/api/v5/publish';
+  }
+  return { authHeader: cachedAuthHeader, publishUrl: cachedPublishUrl };
+}
+
+async function triggerReload() {
+  const apiUrl = process.env.EMQX_API_URL;
+  const apiKey = process.env.EMQX_API_KEY;
+  const apiSecret = process.env.EMQX_API_SECRET;
+
+  if (apiUrl && apiKey && apiSecret) {
+    try {
+      const { authHeader, publishUrl } = getEmqxConfig(apiUrl, apiKey, apiSecret);
+      await fetch(publishUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': authHeader,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          topic: 'device/commands',
+          qos: 1,
+          payload: JSON.stringify({ action: 'reload_config' }),
+          payload_encoding: 'plain'
+        }),
+        signal: AbortSignal.timeout(4000)
+      });
+      console.log('Successfully published reload_config command via MQTT.');
+    } catch (err) {
+      console.error('Failed to publish reload_config command:', err.message);
+    }
+  }
+}
+
 // Create or Update Pump
 export async function POST(request) {
   try {
@@ -30,6 +76,7 @@ export async function POST(request) {
         SET name = ${name}, pin = ${parsedPin}
         WHERE id = ${parseInt(id, 10)}
       `;
+      await triggerReload();
       return NextResponse.json({ success: true, message: 'Pump configuration updated successfully.' });
     } else {
       // Insert new pump config
@@ -37,6 +84,7 @@ export async function POST(request) {
         INSERT INTO pump_configs (name, pin)
         VALUES (${name}, ${parsedPin})
       `;
+      await triggerReload();
       return NextResponse.json({ success: true, message: 'Pump added successfully.' });
     }
   } catch (error) {
@@ -67,6 +115,7 @@ export async function DELETE(request) {
       WHERE id = ${parseInt(id, 10)}
     `;
 
+    await triggerReload();
     return NextResponse.json({ success: true, message: 'Pump configuration deleted successfully.' });
   } catch (error) {
     console.error('Failed to delete pump configuration:', error);

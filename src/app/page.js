@@ -48,6 +48,7 @@ export default function Dashboard() {
   const [sensorName, setSensorName] = useState('');
   const [sensorType, setSensorType] = useState('moisture');
   const [sensorPin, setSensorPin] = useState(32);
+  const [sensorPinSecondary, setSensorPinSecondary] = useState('');
   const [sensorGroup, setSensorGroup] = useState('Soil Moisture');
   const [sensorDryLimit, setSensorDryLimit] = useState(3400);
   const [sensorWetLimit, setSensorWetLimit] = useState(1100);
@@ -413,19 +414,25 @@ export default function Dashboard() {
   const triggerWifiSave = async () => {
     setTogglingConfig(true);
     try {
-      const results = await Promise.all([
+      const promises = [
         fetch('/api/config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key: 'wifi_ssid', value: wifiSsid })
-        }),
-        fetch('/api/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key: 'wifi_password', value: wifiPassword })
         })
-      ]);
+      ];
 
+      if (wifiPassword !== '••••••••') {
+        promises.push(
+          fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: 'wifi_password', value: wifiPassword })
+          })
+        );
+      }
+
+      const results = await Promise.all(promises);
       const jsonResults = await Promise.all(results.map(r => r.json().catch(() => ({ success: false }))));
       const allSuccess = jsonResults.every(r => r.success);
 
@@ -576,6 +583,7 @@ export default function Dashboard() {
           name: sensorName,
           type: sensorType,
           pin: parseInt(sensorPin, 10),
+          pin_secondary: sensorType === 'water_level' && sensorPinSecondary !== '' ? parseInt(sensorPinSecondary, 10) : null,
           sensor_group: sensorGroup || 'General',
           dry_limit: sensorType === 'moisture' || sensorType === 'water_level' ? parseInt(sensorDryLimit, 10) : null,
           wet_limit: sensorType === 'moisture' || sensorType === 'water_level' ? parseInt(sensorWetLimit, 10) : null
@@ -589,6 +597,7 @@ export default function Dashboard() {
           setSensorName('');
           setSensorType('moisture');
           setSensorPin(32);
+          setSensorPinSecondary('');
           setSensorGroup('Soil Moisture');
           setSensorDryLimit(3400);
           setSensorWetLimit(1100);
@@ -1117,7 +1126,9 @@ export default function Dashboard() {
 
                       <div className="grid grid-cols-3 gap-3">
                         <div>
-                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">ESP32 Pin</label>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">
+                            {sensorType === 'water_level' ? 'Trig Pin (Primary)' : 'ESP32 Pin'}
+                          </label>
                           <input
                             type="number"
                             value={sensorPin}
@@ -1125,6 +1136,17 @@ export default function Dashboard() {
                             className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none font-mono"
                           />
                         </div>
+                        {sensorType === 'water_level' && (
+                          <div>
+                            <label className="text-[9px] font-semibold text-zinc-500 uppercase">Echo Pin (Secondary)</label>
+                            <input
+                              type="number"
+                              value={sensorPinSecondary}
+                              onChange={(e) => setSensorPinSecondary(e.target.value)}
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none font-mono"
+                            />
+                          </div>
+                        )}
                         <div>
                           <label className="text-[9px] font-semibold text-zinc-500 uppercase">Group Name</label>
                           <input
@@ -1166,6 +1188,7 @@ export default function Dashboard() {
                               setEditingSensorId(null);
                               setSensorName('');
                               setSensorPin(32);
+                              setSensorPinSecondary('');
                               setSensorGroup('Soil Moisture');
                             }}
                             className="bg-white border border-zinc-200 px-3 py-1.5 text-xs font-semibold rounded-lg"
@@ -1190,7 +1213,7 @@ export default function Dashboard() {
                           <div>
                             <span className="font-bold text-zinc-800 block">{sensor.name}</span>
                             <span className="text-[10px] text-zinc-400 font-mono">
-                              Type: {sensor.type} | Pin: {sensor.pin} | Group: {sensor.sensor_group}
+                              Type: {sensor.type} | Pin: {sensor.pin}{(sensor.pin_secondary !== null && sensor.pin_secondary !== undefined) ? ` (Echo: ${sensor.pin_secondary})` : ''} | Group: {sensor.sensor_group}
                             </span>
                           </div>
                           <div className="flex gap-2">
@@ -1200,9 +1223,10 @@ export default function Dashboard() {
                                 setSensorName(sensor.name);
                                 setSensorType(sensor.type);
                                 setSensorPin(sensor.pin);
+                                setSensorPinSecondary(sensor.pin_secondary !== null && sensor.pin_secondary !== undefined ? sensor.pin_secondary : '');
                                 setSensorGroup(sensor.sensor_group);
-                                setSensorDryLimit(sensor.dry_limit || 3400);
-                                setSensorWetLimit(sensor.wet_limit || 1100);
+                                setSensorDryLimit(sensor.dry_limit !== null && sensor.dry_limit !== undefined ? sensor.dry_limit : 3400);
+                                setSensorWetLimit(sensor.wet_limit !== null && sensor.wet_limit !== undefined ? sensor.wet_limit : 1100);
                               }}
                               className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-zinc-50 rounded-lg text-zinc-600 transition"
                             >

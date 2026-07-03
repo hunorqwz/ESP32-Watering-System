@@ -43,8 +43,7 @@ export async function GET() {
     });
 
     if (configMap['wifi_password']) {
-      const { decrypt } = await import('@/lib/crypto');
-      configMap['wifi_password'] = decrypt(configMap['wifi_password']);
+      configMap['wifi_password'] = '••••••••';
     }
 
     const intervalMinutes = configMap['telemetry_interval_minutes'] 

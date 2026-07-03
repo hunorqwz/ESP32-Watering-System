@@ -12,7 +12,7 @@ export async function GET() {
         WHERE key IN ('wifi_ssid', 'wifi_password', 'telemetry_interval_minutes')
       `,
       sql`
-        SELECT id, name, type, pin, dry_limit, wet_limit FROM sensor_configs 
+        SELECT id, name, type, pin, pin_secondary, dry_limit, wet_limit FROM sensor_configs 
         ORDER BY id ASC
       `,
       sql`

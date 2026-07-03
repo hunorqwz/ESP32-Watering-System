@@ -1,2 +1,4 @@
 2026-06-27T15:31:39.575Z - RAW: {"deviceId":"esp32_test_local","m1":1500,"m2":2000,"m3":2500,"m4":3000,"m5":3200,"temp":24.5,"hum":40.2,"waterLevel":45}
 2026-06-27T15:34:48.094Z - RAW: this is not JSON
+2026-07-03T16:20:42.709Z - RAW: {"deviceId":"esp32_test_local","m1":1500,"m2":2000,"m3":2500,"m4":3000,"m5":3200,"temp":24.5,"hum":40.2,"waterLevel":45}
+2026-07-03T16:39:17.397Z - RAW: {"deviceId":"esp32_test_local","m1":1500,"m2":2000,"m3":2500,"m4":3000,"m5":3200,"temp":24.5,"hum":40.2,"waterLevel":45}
