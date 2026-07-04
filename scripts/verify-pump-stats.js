@@ -33,7 +33,10 @@ async function runTest() {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
 
-  // 1. Set Pump 1 flow rate to 5.0 L/min for testing
+  // 1. Query and cache original flow rate, then set Pump 1 flow rate to 5.0 L/min for testing
+  const origRes = await client.query('SELECT flow_rate_lpm FROM pump_configs WHERE id = 1');
+  const originalFlowRate = origRes.rows[0]?.flow_rate_lpm !== null && origRes.rows[0]?.flow_rate_lpm !== undefined ? parseFloat(origRes.rows[0].flow_rate_lpm) : 4.0;
+  console.log(`Original Pump 1 flow rate is ${originalFlowRate} L/min.`);
   console.log('Setting Pump 1 flow rate to 5.0 L/min...');
   await client.query('UPDATE pump_configs SET flow_rate_lpm = 5.0 WHERE id = 1');
 
@@ -59,6 +62,8 @@ async function runTest() {
 
   if (res.status !== 200 || !body.success) {
     console.error('Result: FAILURE (API request failed)');
+    // Restore flow rate on failure
+    await client.query('UPDATE pump_configs SET flow_rate_lpm = $1 WHERE id = 1', [originalFlowRate]);
     await client.end();
     process.exit(1);
   }
@@ -73,24 +78,47 @@ async function runTest() {
   console.log('Logged Duration:', log.duration_seconds, 'seconds');
   console.log('Logged Water Used:', log.water_used_liters, 'Liters');
 
+  let testPassed = true;
+
   // Assertions: duration should be around 15 seconds, and water used should be around 15 / 60 * 5.0 = 1.25 -> 1.3 Liters
   if (log.duration_seconds >= 14 && log.duration_seconds <= 17) {
     console.log('Result: SUCCESS (Duration is accurate)');
   } else {
     console.error('Result: FAILURE (Duration is outside expected range of 14-17s)');
-    await client.end();
-    process.exit(1);
+    testPassed = false;
   }
 
   if (parseFloat(log.water_used_liters) === 1.3 || parseFloat(log.water_used_liters) === 1.2) {
     console.log('Result: SUCCESS (Water usage estimation is accurate)');
   } else {
     console.error('Result: FAILURE (Water usage calculation is incorrect)');
-    await client.end();
-    process.exit(1);
+    testPassed = false;
+  }
+
+  // Cleanup: Restore flow rate and delete test log entries
+  console.log('\nCleaning up database modifications...');
+  try {
+    await client.query('UPDATE pump_configs SET flow_rate_lpm = $1 WHERE id = 1', [originalFlowRate]);
+    await client.query(
+      `DELETE FROM command_logs 
+       WHERE pump = 1 AND response_msg_id = 'test_on_msg_id'`
+    );
+    await client.query(
+      `DELETE FROM command_logs 
+       WHERE pump = 1 AND state = 0 AND created_at > NOW() - INTERVAL '2 minutes'`
+    );
+    console.log('Cleanup completed successfully.');
+  } catch (cleanupErr) {
+    console.warn('Cleanup failed:', cleanupErr.message);
   }
 
   await client.end();
+  
+  if (!testPassed) {
+    console.error('\n--- PUMP STATS TESTS FAILED ---');
+    process.exit(1);
+  }
+  
   console.log('\n--- ALL PUMP STATS TESTS COMPLETED SUCCESSFULLY ---');
 }
 

@@ -80,8 +80,8 @@ async function runTests() {
     process.exit(1);
   }
 
-  // Test 3: Try to create a sensor on pin 32 (occupied by Zone 1 sensor)
-  console.log('\n[Test 3] Creating sensor on occupied Zone 1 sensor pin (GPIO 32)...');
+  // Test 3: Try to create a sensor on pin 4 (occupied by Ambient Temp sensor)
+  console.log('\n[Test 3] Creating sensor on occupied Ambient Temp sensor pin (GPIO 4)...');
   try {
     const res = await fetch(`${baseUrl}/api/sensor`, {
       method: 'POST',
@@ -89,17 +89,40 @@ async function runTests() {
       body: JSON.stringify({
         name: 'Ambient Humidity Test',
         type: 'humidity',
-        pin: 32,
+        pin: 4,
         sensor_group: 'Environment'
       })
     });
     const body = await res.json();
     console.log('Status Code:', res.status);
     console.log('Response:', body);
-    if (res.status === 200 && body.success && body.warning && body.warning.includes('shared with sensor "Zone 1"')) {
-      console.log('Result: SUCCESS (Saved successfully with a warning response)');
+    if (res.status === 200 && body.needsForce && body.warning && body.warning.includes('shared with sensor "Ambient Temp"')) {
+      console.log('Result: SUCCESS (Returned soft warning correctly)');
     } else {
-      console.error('Result: FAILURE (Expected 200 OK with soft warning payload)');
+      console.error('Result: FAILURE (Expected 200 OK with needsForce and soft warning payload)');
+      process.exit(1);
+    }
+
+    // Now resend with force: true
+    console.log('\n[Test 3b] Re-sending with force: true to save...');
+    const forceRes = await fetch(`${baseUrl}/api/sensor`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Ambient Humidity Test',
+        type: 'humidity',
+        pin: 4,
+        sensor_group: 'Environment',
+        force: true
+      })
+    });
+    const forceBody = await forceRes.json();
+    console.log('Force Status Code:', forceRes.status);
+    console.log('Force Response:', forceBody);
+    if (forceRes.status === 200 && forceBody.success) {
+      console.log('Result: SUCCESS (Saved successfully with force: true)');
+    } else {
+      console.error('Result: FAILURE (Expected 200 OK with success)');
       process.exit(1);
     }
   } catch (err) {

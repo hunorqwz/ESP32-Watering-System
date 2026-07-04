@@ -33,8 +33,8 @@ export async function POST(request) {
   console.log(rawBody);
   console.log('------------------------------------');
   try {
-    const fs = await import('fs');
-    fs.appendFileSync('ingest_debug.log', `${new Date().toISOString()} - RAW: ${rawBody}\n`);
+    const fs = await import('fs/promises');
+    await fs.appendFile('ingest_debug.log', `${new Date().toISOString()} - RAW: ${rawBody}\n`);
   } catch (err) {
     console.error('Failed to write ingest_debug.log:', err.message);
   }

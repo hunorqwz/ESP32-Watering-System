@@ -33,6 +33,11 @@ async function runTest() {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
 
+  // 0. Query if Pump 3 and Pump 4 exist before deleting
+  const existingPumpsRes = await client.query('SELECT name FROM pump_configs WHERE name IN ($1, $2)', ['Pump 3', 'Pump 4']);
+  const hadPump3 = existingPumpsRes.rows.some(r => r.name === 'Pump 3');
+  const hadPump4 = existingPumpsRes.rows.some(r => r.name === 'Pump 4');
+
   // 1. Delete Pump 3 and Pump 4 to simulate user action
   console.log('Deleting Pump 3 and Pump 4 from the database...');
   await client.query('DELETE FROM pump_configs WHERE name IN ($1, $2)', ['Pump 3', 'Pump 4']);
@@ -52,16 +57,44 @@ async function runTest() {
 
   const containsPump3 = pumpNames.includes('Pump 3');
   const containsPump4 = pumpNames.includes('Pump 4');
-
+  let testPassed = true;
   if (!containsPump3 && !containsPump4) {
     console.log('\nResult: SUCCESS (Custom deletions were preserved!)');
   } else {
     console.error('\nResult: FAILURE (Pumps were restored by db-init.js!)');
-    await client.end();
-    process.exit(1);
+    testPassed = false;
+  }
+
+  // Cleanup: Re-insert Pump 3 and Pump 4 only if they existed at the start
+  console.log('\nCleaning up database deletions...');
+  try {
+    const pumpsToRestore = [];
+    if (hadPump3) pumpsToRestore.push("(3, 'Pump 3', 18, 0, 4.0)");
+    if (hadPump4) pumpsToRestore.push("(4, 'Pump 4', 19, 0, 4.0)");
+    
+    if (pumpsToRestore.length > 0) {
+      console.log(`Re-inserting pumps: ${pumpsToRestore.join(', ')}`);
+      await client.query(
+        `INSERT INTO pump_configs (id, name, pin, state, flow_rate_lpm)
+         VALUES ${pumpsToRestore.join(', ')}
+         ON CONFLICT (id) DO UPDATE 
+         SET name = EXCLUDED.name, pin = EXCLUDED.pin, state = EXCLUDED.state, flow_rate_lpm = EXCLUDED.flow_rate_lpm`
+      );
+      // Sync sequence value to prevent duplicate key constraint violations on next insert
+      await client.query("SELECT setval(pg_get_serial_sequence('pump_configs', 'id'), COALESCE(max(id), 1)) FROM pump_configs");
+      console.log('Pumps successfully restored.');
+    } else {
+      console.log('No pumps needed restoration.');
+    }
+  } catch (restoreErr) {
+    console.warn('Failed to restore deleted pumps:', restoreErr.message);
   }
 
   await client.end();
+  
+  if (!testPassed) {
+    process.exit(1);
+  }
 }
 
 runTest().catch(err => {
