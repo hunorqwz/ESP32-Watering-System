@@ -68,6 +68,30 @@ CREATE TABLE IF NOT EXISTS system_notes (
 );
 
 
+-- Table for dynamic watering schedules
+CREATE TABLE IF NOT EXISTS watering_schedules (
+    id SERIAL PRIMARY KEY,
+    pump_id INT NOT NULL REFERENCES pump_configs(id) ON DELETE CASCADE,
+    time_of_day TIME NOT NULL,
+    duration_seconds INT NOT NULL CHECK (duration_seconds > 0),
+    days_of_week INT[] NOT NULL,           -- e.g. [1, 2, 3, 4, 5, 6, 7] where 1 = Monday, 7 = Sunday
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_watering_schedules_pump ON watering_schedules (pump_id);
+
+-- Table for caching weather forecasts to respect rate limits
+CREATE TABLE IF NOT EXISTS weather_forecast_cache (
+    id SERIAL PRIMARY KEY,
+    forecast_date DATE UNIQUE NOT NULL,
+    precipitation_probability REAL NOT NULL CHECK (precipitation_probability >= 0 AND precipitation_probability <= 1),
+    expected_precipitation_mm REAL NOT NULL CHECK (expected_precipitation_mm >= 0),
+    raw_payload JSONB,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+
 -- CONDITIONAL DATA SEEDING (Executes only if tables are completely empty)
 DO $$
 BEGIN
@@ -122,3 +146,4 @@ END $$;
 SELECT setval(pg_get_serial_sequence('sensor_configs', 'id'), COALESCE(max(id), 1)) FROM sensor_configs;
 SELECT setval(pg_get_serial_sequence('pump_configs', 'id'), COALESCE(max(id), 1)) FROM pump_configs;
 SELECT setval(pg_get_serial_sequence('system_notes', 'id'), COALESCE(max(id), 1)) FROM system_notes;
+SELECT setval(pg_get_serial_sequence('watering_schedules', 'id'), COALESCE(max(id), 1)) FROM watering_schedules;

@@ -1,11 +1,11 @@
 'use client';
-
+ 
 import { useState, useEffect, useRef } from 'react';
 import mqtt from 'mqtt';
-import { Cylinder, Thermometer, Droplets, Sprout, RefreshCw, Settings, X, Plus, Trash2, Edit2, Wifi } from 'lucide-react';
+import { Cylinder, Thermometer, Droplets, Sprout, RefreshCw, Settings, X, Plus, Trash2, Edit2, Wifi, Clock, CloudSun, Calendar } from 'lucide-react';
 import ActivityLog from '@/components/ActivityLog';
 import NotesModal from '@/components/NotesModal';
-
+ 
 export default function Dashboard({ apiToken }) {
   const refreshIntervalRef = useRef(null);
   const [data, setData] = useState({
@@ -15,7 +15,10 @@ export default function Dashboard({ apiToken }) {
     history_readings: [],
     configs: {},
     commands: [],
-    device_status: { active: false, last_seen_seconds: null, interval_minutes: 15 }
+    device_status: { active: false, last_seen_seconds: null, interval_minutes: 15 },
+    schedules: [],
+    weather_forecast: [],
+    next_watering: { time: 'None Scheduled', reason: 'No active schedules defined.', skipped: false, details: '' }
   });
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(false);
@@ -29,27 +32,27 @@ export default function Dashboard({ apiToken }) {
   const [pumpsState, setPumpsState] = useState({});
   const [togglingPumps, setTogglingPumps] = useState({});
   const [lastReportTime, setLastReportTime] = useState(null);
-
+ 
   // Notes Modal State
   const [isNotesOpen, setIsNotesOpen] = useState(false);
-
+ 
   // Configuration Manager Modal States
   const [isConfigOpen, setIsConfigOpen] = useState(false);
-  const [configTab, setConfigTab] = useState('network'); // 'network', 'sensors', 'pumps', 'general'
-
+  const [configTab, setConfigTab] = useState('network'); // 'network', 'sensors', 'pumps', 'general', 'schedules'
+ 
   // Forms
   const [wifiSsid, setWifiSsid] = useState('');
   const [wifiPassword, setWifiPassword] = useState('');
   const [customInterval, setCustomInterval] = useState(15);
   const [intervalUnit, setIntervalUnit] = useState('minutes');
-
+ 
   // Reservoir calibration forms
   const [reservoirUseDimensions, setReservoirUseDimensions] = useState(false);
   const [reservoirTotalVolume, setReservoirTotalVolume] = useState(100);
   const [reservoirWidth, setReservoirWidth] = useState(60);
   const [reservoirLength, setReservoirLength] = useState(70);
   const [reservoirHeight, setReservoirHeight] = useState(50);
-
+ 
   // Sensor Form
   const [editingSensorId, setEditingSensorId] = useState(null);
   const [sensorName, setSensorName] = useState('');
@@ -58,7 +61,7 @@ export default function Dashboard({ apiToken }) {
   const [sensorPinSecondary, setSensorPinSecondary] = useState('');
   const [sensorDryLimit, setSensorDryLimit] = useState(3400);
   const [sensorWetLimit, setSensorWetLimit] = useState(1100);
-
+ 
   // Pump Form
   const [editingPumpId, setEditingPumpId] = useState(null);
   const [pumpName, setPumpName] = useState('');
@@ -66,6 +69,14 @@ export default function Dashboard({ apiToken }) {
   const [pumpFlowRate, setPumpFlowRate] = useState(4.0);
   const [reservoirSensorOffset, setReservoirSensorOffset] = useState(100);
 
+  // Schedule Form State
+  const [editingScheduleId, setEditingScheduleId] = useState(null);
+  const [schedPumpId, setSchedPumpId] = useState('');
+  const [schedTime, setSchedTime] = useState('07:00');
+  const [schedDuration, setSchedDuration] = useState(120);
+  const [schedDays, setSchedDays] = useState([1, 2, 3, 4, 5, 6, 7]);
+  const [schedEnabled, setSchedEnabled] = useState(true);
+ 
   // Dynamic UI feedback states
   const [toasts, setToasts] = useState([]);
   const [confirmDialog, setConfirmDialog] = useState(null);
@@ -762,6 +773,80 @@ export default function Dashboard({ apiToken }) {
     });
   };
 
+  // Schedule Add/Edit/Save
+  const handleScheduleSave = async () => {
+    if (!schedPumpId || !schedTime || !schedDuration || schedDays.length === 0) {
+      showToast('Please select a pump, time, duration, and at least one day.', 'error');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: editingScheduleId,
+          pump_id: parseInt(schedPumpId, 10),
+          time_of_day: schedTime,
+          duration_seconds: parseInt(schedDuration, 10),
+          days_of_week: schedDays,
+          enabled: schedEnabled
+        })
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          showToast(editingScheduleId ? 'Schedule updated successfully.' : 'New schedule added successfully.', 'success');
+          setEditingScheduleId(null);
+          setSchedPumpId('');
+          setSchedTime('07:00');
+          setSchedDuration(120);
+          setSchedDays([1, 2, 3, 4, 5, 6, 7]);
+          setSchedEnabled(true);
+          await fetchDashboardData();
+        } else {
+          showToast(json.error || 'Failed to save schedule.', 'error');
+        }
+      } else {
+        showToast('Server failed to save schedule.', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to save schedule:', err);
+      showToast('Network error saving schedule.', 'error');
+    }
+  };
+
+  const triggerScheduleDelete = async (scheduleId) => {
+    try {
+      const res = await fetch(`/api/schedule?id=${scheduleId}`, { method: 'DELETE' });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          showToast('Schedule deleted successfully.', 'success');
+          await fetchDashboardData();
+        } else {
+          showToast(json.error || 'Failed to delete schedule.', 'error');
+        }
+      } else {
+        showToast('Server failed to delete schedule config.', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to delete schedule:', err);
+      showToast('Network error deleting schedule.', 'error');
+    }
+  };
+
+  const handleScheduleDelete = (scheduleId) => {
+    setConfirmDialog({
+      title: 'Delete Watering Schedule?',
+      message: 'Are you sure you want to permanently delete this scheduled watering event? This action cannot be undone.',
+      confirmLabel: 'Delete Schedule',
+      type: 'danger',
+      onConfirm: () => triggerScheduleDelete(scheduleId)
+    });
+  };
+
   const renderLastSeenText = () => {
     const elapsed = deviceStatus.last_seen_seconds;
     if (elapsed === null) return 'Never seen';
@@ -947,6 +1032,81 @@ export default function Dashboard({ apiToken }) {
           </div>
         </div>
 
+        {/* Next Watering & Weather Forecast Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          
+          {/* Next Watering Prediction Card */}
+          <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-4 flex flex-col justify-between">
+            <div className="flex justify-between items-start">
+              <div>
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold block">Next Watering Run</span>
+                <div className="text-lg font-bold tracking-tight text-zinc-900 mt-1 flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-zinc-400" />
+                  <span>{data.next_watering?.time || 'None Scheduled'}</span>
+                </div>
+              </div>
+              <span className={`px-2 py-0.5 text-[9px] uppercase tracking-wider font-bold rounded-full ${
+                data.next_watering?.skipped 
+                  ? 'bg-amber-50 text-amber-600 border border-amber-200' 
+                  : data.next_watering?.timestamp 
+                    ? 'bg-blue-50 text-blue-600 border border-blue-200'
+                    : 'bg-zinc-50 text-zinc-400 border border-zinc-200'
+              }`}>
+                {data.next_watering?.skipped ? 'Rain Skip Active' : data.next_watering?.timestamp ? 'Scheduled' : 'Inactive'}
+              </span>
+            </div>
+            
+            <div className="space-y-1 text-xs">
+              <p className="text-zinc-600 font-medium">{data.next_watering?.reason}</p>
+              {data.next_watering?.details && (
+                <p className="text-[10px] text-zinc-400 font-mono">{data.next_watering.details}</p>
+              )}
+            </div>
+          </div>
+
+          {/* Weather Forecast Card */}
+          <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-3">
+            <div className="flex justify-between items-center border-b border-zinc-100 pb-2">
+              <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">Local Weather Forecast</span>
+              <CloudSun className="w-4 h-4 text-zinc-400" />
+            </div>
+            
+            {data.weather_forecast && data.weather_forecast.length === 0 ? (
+              <div className="text-center py-4 text-xs text-zinc-400 italic">No weather forecast available.</div>
+            ) : (
+              <div className="grid grid-cols-5 gap-1.5 text-center">
+                {data.weather_forecast?.slice(0, 5).map((w, index) => {
+                  const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                  const wDate = new Date(w.forecast_date);
+                  const dayName = index === 0 ? 'Today' : index === 1 ? 'Tom' : daysShort[wDate.getDay()];
+                  
+                  const showRainAlert = w.precipitation_probability > 0.5 && w.expected_precipitation_mm >= 2.0;
+
+                  return (
+                    <div key={w.forecast_date} className={`p-1.5 rounded-lg border transition ${
+                      showRainAlert 
+                        ? 'bg-blue-50/50 border-blue-100 text-blue-900' 
+                        : 'border-zinc-50 text-zinc-800'
+                    }`}>
+                      <span className="text-[8px] font-bold uppercase tracking-wider block text-zinc-400">{dayName}</span>
+                      <span className="text-xs font-extrabold block mt-0.5">{Math.round(w.temp_c)}°C</span>
+                      <span className="text-[8px] block font-mono text-zinc-500 mt-0.5 truncate" title={w.description}>
+                        {w.description}
+                      </span>
+                      {w.precipitation_probability > 0 && (
+                        <span className={`text-[8px] font-bold block mt-0.5 ${showRainAlert ? 'text-blue-600' : 'text-zinc-400'}`}>
+                          {Math.round(w.precipitation_probability * 100)}% ({w.expected_precipitation_mm}mm)
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+        </div>
+
         {/* Middle Tier: Soil Moisture (Dynamic list) */}
         <div className="space-y-3">
           <h2 className="text-[10px] text-black uppercase tracking-wider font-bold">Soil Moisture</h2>
@@ -1092,6 +1252,7 @@ export default function Dashboard({ apiToken }) {
                   { id: 'network', label: 'Network Info', icon: Wifi },
                   { id: 'sensors', label: 'Sensors', icon: Sprout },
                   { id: 'pumps', label: 'Pumps', icon: Settings },
+                  { id: 'schedules', label: 'Schedules', icon: Clock },
                   { id: 'general', label: 'General Settings', icon: Cylinder }
                 ].map(tab => (
                   <button
@@ -1529,6 +1690,174 @@ export default function Dashboard({ apiToken }) {
                       >
                         Save Reservoir Settings
                       </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. DYNAMIC WATERING SCHEDULES CONFIGURATION TAB */}
+                {configTab === 'schedules' && (
+                  <div className="space-y-6">
+                    <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wider border-b pb-1.5">Manage Watering Schedules</h4>
+
+                    {/* Schedule Form */}
+                    <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-4 space-y-3 text-xs">
+                      <span className="font-bold text-zinc-700 block text-[11px] uppercase tracking-wider">
+                        {editingScheduleId ? 'Edit Watering Schedule' : 'Add Custom Watering Schedule'}
+                      </span>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Target Pump</label>
+                          <select
+                            value={schedPumpId}
+                            onChange={(e) => setSchedPumpId(e.target.value)}
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2 mt-0.5 focus:outline-none"
+                          >
+                            <option value="">Select Pump...</option>
+                            {data.pumps.map(p => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Time of Day (24h)</label>
+                          <input
+                            type="time"
+                            value={schedTime}
+                            onChange={(e) => setSchedTime(e.target.value)}
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2 mt-0.5 focus:outline-none font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Duration (Seconds)</label>
+                          <input
+                            type="number"
+                            min="5"
+                            max="600"
+                            value={schedDuration}
+                            onChange={(e) => setSchedDuration(parseInt(e.target.value, 10))}
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2 mt-0.5 focus:outline-none font-mono"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Days of Week Select Toggles */}
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] font-semibold text-zinc-500 uppercase block">Active Days</label>
+                        <div className="flex flex-wrap gap-1.5 mt-0.5">
+                          {[
+                            { val: 1, label: 'M' },
+                            { val: 2, label: 'T' },
+                            { val: 3, label: 'W' },
+                            { val: 4, label: 'T' },
+                            { val: 5, label: 'F' },
+                            { val: 6, label: 'S' },
+                            { val: 7, label: 'S' }
+                          ].map(d => {
+                            const isSelected = schedDays.includes(d.val);
+                            return (
+                              <button
+                                key={d.val}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    setSchedDays(prev => prev.filter(v => v !== d.val));
+                                  } else {
+                                    setSchedDays(prev => [...prev, d.val].sort());
+                                  }
+                                }}
+                                className={`w-7 h-7 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer ${
+                                  isSelected ? 'bg-blue-600 border-blue-600 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50'
+                                }`}
+                              >
+                                {d.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Enabled state switch */}
+                      <div className="flex items-center gap-2 pt-1">
+                        <label className="text-[9px] font-semibold text-zinc-500 uppercase">Schedule Enabled</label>
+                        <button
+                          type="button"
+                          onClick={() => setSchedEnabled(prev => !prev)}
+                          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${schedEnabled ? 'bg-blue-600' : 'bg-zinc-200'}`}
+                        >
+                          <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${schedEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                        </button>
+                      </div>
+
+                      <div className="flex justify-end gap-2 pt-1">
+                        {editingScheduleId && (
+                          <button
+                            onClick={() => {
+                              setEditingScheduleId(null);
+                              setSchedPumpId('');
+                              setSchedTime('07:00');
+                              setSchedDuration(120);
+                              setSchedDays([1, 2, 3, 4, 5, 6, 7]);
+                              setSchedEnabled(true);
+                            }}
+                            className="bg-white border border-zinc-200 px-3 py-1.5 text-xs font-semibold rounded-lg"
+                          >
+                            Cancel
+                          </button>
+                        )}
+                        <button
+                          onClick={handleScheduleSave}
+                          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-1.5 text-xs rounded-lg active:scale-95 transition-all shadow-sm"
+                        >
+                          {editingScheduleId ? 'Update Schedule' : 'Add Schedule'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Schedules List */}
+                    <div className="space-y-2">
+                      <span className="font-bold text-zinc-700 block text-[10px] uppercase tracking-wider">Configured Schedules</span>
+                      {data.schedules && data.schedules.length === 0 ? (
+                        <div className="text-center py-4 text-xs text-zinc-400 italic">No schedules defined yet.</div>
+                      ) : (
+                        data.schedules?.map(sched => {
+                          const daysMap = { 1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat', 7: 'Sun' };
+                          const activeDaysStr = sched.days_of_week.map(d => daysMap[d]).join(', ');
+                          
+                          return (
+                            <div key={sched.id} className="flex justify-between items-center text-xs bg-white border border-zinc-200 p-3 rounded-xl shadow-sm">
+                              <div>
+                                <span className={`font-bold block ${sched.enabled ? 'text-zinc-800' : 'text-zinc-400 line-through'}`}>
+                                  {sched.pump_name} at {sched.time_of_day.substring(0, 5)}
+                                </span>
+                                <span className="text-[10px] text-zinc-400">
+                                  Days: {activeDaysStr} | Duration: {sched.duration_seconds}s
+                                </span>
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => {
+                                    setEditingScheduleId(sched.id);
+                                    setSchedPumpId(sched.pump_id);
+                                    setSchedTime(sched.time_of_day.substring(0, 5));
+                                    setSchedDuration(sched.duration_seconds);
+                                    setSchedDays(sched.days_of_week);
+                                    setSchedEnabled(sched.enabled);
+                                  }}
+                                  className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-zinc-50 rounded-lg text-zinc-600 transition"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleScheduleDelete(sched.id)}
+                                  className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-red-50 text-red-500 rounded-lg transition"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
                     </div>
                   </div>
                 )}
