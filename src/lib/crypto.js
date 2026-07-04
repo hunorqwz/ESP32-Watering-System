@@ -3,9 +3,11 @@ import crypto from 'crypto';
 const ALGORITHM = 'aes-256-cbc';
 const IV_LENGTH = 16;
 
-// Derive a 32-byte key from the environment variables safely
 function getKey() {
-  const secret = process.env.ENCRYPTION_KEY || process.env.DATABASE_URL || 'default-watering-system-encryption-secret-key-fallback';
+  const secret = process.env.ENCRYPTION_KEY || process.env.DATABASE_URL;
+  if (!secret) {
+    throw new Error('Insecure Application Configuration: DATABASE_URL or ENCRYPTION_KEY environment variables must be defined to derive a secure cryptographic key.');
+  }
   return crypto.createHash('sha256').update(secret).digest();
 }
 

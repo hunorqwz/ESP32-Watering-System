@@ -157,7 +157,8 @@ export async function POST(request) {
       try {
         const { authHeader, publishUrl } = getEmqxConfig(apiUrl, apiKey, apiSecret);
 
-        await fetch(publishUrl, {
+        // Fire-and-forget MQTT publish so the ESP32 is not kept waiting on connection round-trips
+        fetch(publishUrl, {
           method: 'POST',
           headers: {
             'Authorization': authHeader,
@@ -170,9 +171,11 @@ export async function POST(request) {
             payload_encoding: 'plain'
           }),
           signal: AbortSignal.timeout(4000)
+        }).catch(err => {
+          console.error('Failed to publish telemetry update to EMQX broker:', err.message);
         });
       } catch (err) {
-        console.error('Failed to publish telemetry update to EMQX broker:', err.message);
+        console.error('Failed to set up EMQX config:', err.message);
       }
     }
 

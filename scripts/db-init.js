@@ -48,7 +48,8 @@ async function initializeDatabase() {
         'DROP TABLE IF EXISTS sensor_logs CASCADE',
         'DROP TABLE IF EXISTS system_config CASCADE',
         'DROP TABLE IF EXISTS sensor_configs CASCADE',
-        'DROP TABLE IF EXISTS pump_configs CASCADE'
+        'DROP TABLE IF EXISTS pump_configs CASCADE',
+        'DROP TABLE IF EXISTS system_notes CASCADE'
       ];
       for (const drop of drops) {
         console.log(`Executing: ${drop}...`);

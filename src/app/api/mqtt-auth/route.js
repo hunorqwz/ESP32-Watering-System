@@ -1,6 +1,18 @@
 import { NextResponse } from 'next/server';
 
-export async function GET() {
+export async function GET(request) {
+  // Validate API Access Token
+  const authHeader = request.headers.get('Authorization');
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+  const secretToken = process.env.API_ACCESS_TOKEN;
+
+  if (!secretToken || token !== secretToken) {
+    return NextResponse.json(
+      { success: false, error: 'Unauthorized: Invalid or missing access token.' },
+      { status: 401 }
+    );
+  }
+
   const username = process.env.EMQX_MQTT_USER;
   const password = process.env.EMQX_MQTT_PASSWORD;
   const apiUrl = process.env.EMQX_API_URL;

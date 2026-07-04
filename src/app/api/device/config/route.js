@@ -1,7 +1,19 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 
-export async function GET() {
+export async function GET(request) {
+  // Validate API Access Token
+  const authHeader = request.headers.get('Authorization');
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+  const secretToken = process.env.API_ACCESS_TOKEN;
+
+  if (!secretToken || token !== secretToken) {
+    return NextResponse.json(
+      { success: false, error: 'Unauthorized: Invalid or missing access token.' },
+      { status: 401 }
+    );
+  }
+
   try {
     const sql = getDb();
 

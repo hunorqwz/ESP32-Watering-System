@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
 CREATE INDEX IF NOT EXISTS idx_sensor_readings_config_created ON sensor_readings (sensor_config_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sensor_readings_created ON sensor_readings (created_at DESC);
 
+-- Table for user-created persistent notes and logs
+CREATE TABLE IF NOT EXISTS system_notes (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(100) DEFAULT 'Untitled Note',
+    content TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 
 -- CONDITIONAL DATA SEEDING (Executes only if tables are completely empty)
 DO $$
@@ -96,9 +105,16 @@ BEGIN
             (3, 'Pump 3', 18, 0),
             (4, 'Pump 4', 19, 0);
     END IF;
+
+    -- 4. Seed dynamic welcome note if empty
+    IF NOT EXISTS (SELECT 1 FROM system_notes) THEN
+        INSERT INTO system_notes (title, content)
+        VALUES ('Welcome Note', 'This is your gardening notebook. Use this space to write down reminders, watering schedules, or system observations!');
+    END IF;
 END $$;
 
 
 -- Sync sequence values to prevent duplicate key constraint violations on insert
 SELECT setval(pg_get_serial_sequence('sensor_configs', 'id'), COALESCE(max(id), 1)) FROM sensor_configs;
 SELECT setval(pg_get_serial_sequence('pump_configs', 'id'), COALESCE(max(id), 1)) FROM pump_configs;
+SELECT setval(pg_get_serial_sequence('system_notes', 'id'), COALESCE(max(id), 1)) FROM system_notes;
