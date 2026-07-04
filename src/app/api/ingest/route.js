@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
+import { getReservoirVolume } from '@/lib/reservoir';
 
 let cachedAuthHeader = null;
 let cachedPublishUrl = null;
@@ -127,6 +128,56 @@ export async function POST(request) {
         ) u
         WHERE u.sensor_id IN (SELECT id FROM sensor_configs)
       `;
+    }
+
+    // Calculate water usage difference if water level reading is present
+    const waterSensors = await sql`
+      SELECT id FROM sensor_configs WHERE type = 'water_level' LIMIT 1
+    `;
+    const waterSensor = waterSensors.length > 0 ? waterSensors[0] : null;
+
+    if (waterSensor) {
+      const waterReading = processedReadings.find(r => r.sensor_config_id === waterSensor.id);
+      if (waterReading && waterReading.value !== null && waterReading.value !== undefined) {
+        try {
+          const litersNow = await getReservoirVolume(sql, parseFloat(waterReading.value));
+          if (litersNow !== null) {
+            // Find recent pump OFF logs (within 15 minutes) with pending (NULL) water_used_liters
+            const pendingOffLogs = await sql`
+              SELECT id, pump, created_at FROM command_logs
+              WHERE state = 0
+                AND status = 'success'
+                AND water_used_liters IS NULL
+                AND created_at >= NOW() - INTERVAL '15 minutes'
+              ORDER BY created_at DESC
+            `;
+
+            for (const log of pendingOffLogs) {
+              // Find matching ON log prior to this OFF log
+              const onLog = await sql`
+                SELECT start_volume_liters FROM command_logs
+                WHERE pump = ${log.pump}
+                  AND state = 1
+                  AND status = 'success'
+                  AND created_at < ${log.created_at}
+                  AND start_volume_liters IS NOT NULL
+                ORDER BY created_at DESC LIMIT 1
+              `;
+              if (onLog.length > 0) {
+                const startVol = parseFloat(onLog[0].start_volume_liters);
+                const waterUsed = Math.round(Math.max(0, startVol - litersNow) * 10) / 10;
+                await sql`
+                  UPDATE command_logs
+                  SET water_used_liters = ${waterUsed}
+                  WHERE id = ${log.id}
+                `;
+              }
+            }
+          }
+        } catch (err) {
+          console.error('Failed to calculate dynamic water usage drop on ingest:', err.message);
+        }
+      }
     }
 
     // Fetch current telemetry configuration to return to ESP32

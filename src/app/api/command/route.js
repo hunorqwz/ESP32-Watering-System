@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
+import { getReservoirVolume } from '@/lib/reservoir';
 
 let cachedAuthHeader = null;
 let cachedPublishUrl = null;
@@ -109,6 +110,27 @@ export async function POST(request) {
   // Calculate duration and water usage if transitioning to OFF
   let durationSeconds = null;
   let waterUsedLiters = null;
+  let startVolumeLiters = null;
+
+  if (parsedState === 1) {
+    try {
+      const waterSensor = await sql`
+        SELECT id FROM sensor_configs WHERE type = 'water_level' LIMIT 1
+      `;
+      if (waterSensor.length > 0) {
+        const latestReading = await sql`
+          SELECT value FROM sensor_readings 
+          WHERE sensor_config_id = ${waterSensor[0].id} 
+          ORDER BY created_at DESC LIMIT 1
+        `;
+        if (latestReading.length > 0) {
+          startVolumeLiters = await getReservoirVolume(sql, parseFloat(latestReading[0].value));
+        }
+      }
+    } catch (err) {
+      console.error('Failed to pre-calculate start reservoir volume:', err.message);
+    }
+  }
 
   if (parsedState === 0) {
     try {
@@ -121,7 +143,15 @@ export async function POST(request) {
         const onTime = new Date(lastOnLog[0].created_at).getTime();
         const offTime = Date.now();
         durationSeconds = Math.max(0, Math.floor((offTime - onTime) / 1000));
-        waterUsedLiters = Math.round(((durationSeconds / 60) * flowRateLpm) * 10) / 10;
+        
+        // Defer to literal sensor difference if water level sensor exists,
+        // otherwise fallback to flow rate estimate.
+        const waterSensor = await sql`
+          SELECT id FROM sensor_configs WHERE type = 'water_level' LIMIT 1
+        `;
+        if (waterSensor.length === 0) {
+          waterUsedLiters = Math.round(((durationSeconds / 60) * flowRateLpm) * 10) / 10;
+        }
       }
     } catch (calcErr) {
       console.error('Failed to calculate pump runtime stats:', calcErr.message);
@@ -175,8 +205,8 @@ export async function POST(request) {
         WHERE id = ${parsedPump}
       `,
       sql`
-        INSERT INTO command_logs (pump, pump_name, pump_pin, state, status, response_msg_id, duration_seconds, water_used_liters)
-        VALUES (${parsedPump}, ${pumpName}, ${pumpPin}, ${parsedState}, ${status}, ${messageId}, ${durationSeconds}, ${waterUsedLiters})
+        INSERT INTO command_logs (pump, pump_name, pump_pin, state, status, response_msg_id, duration_seconds, water_used_liters, start_volume_liters)
+        VALUES (${parsedPump}, ${pumpName}, ${pumpPin}, ${parsedState}, ${status}, ${messageId}, ${durationSeconds}, ${waterUsedLiters}, ${startVolumeLiters})
       `
     ]);
 

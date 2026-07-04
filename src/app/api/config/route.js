@@ -23,7 +23,10 @@ export async function POST(request) {
       'reservoir_width_cm',
       'reservoir_length_cm',
       'reservoir_height_cm',
-      'reservoir_sensor_offset_cm'
+      'reservoir_sensor_offset_cm',
+      'latitude',
+      'longitude',
+      'location_name'
     ];
     if (!allowedKeys.includes(key)) {
       return NextResponse.json(

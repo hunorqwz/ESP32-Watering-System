@@ -50,6 +50,40 @@ function getMockForecast() {
   return forecast;
 }
 
+function getWeatherDescription(code) {
+  const mapping = {
+    0: 'Clear sky',
+    1: 'Mainly clear',
+    2: 'Partly cloudy',
+    3: 'Overcast',
+    45: 'Fog',
+    48: 'Foggy rime',
+    51: 'Light drizzle',
+    53: 'Moderate drizzle',
+    55: 'Dense drizzle',
+    56: 'Light freezing drizzle',
+    57: 'Dense freezing drizzle',
+    61: 'Slight rain',
+    63: 'Moderate rain',
+    65: 'Heavy rain',
+    66: 'Light freezing rain',
+    67: 'Heavy freezing rain',
+    71: 'Slight snow fall',
+    73: 'Moderate snow fall',
+    75: 'Heavy snow fall',
+    77: 'Snow grains',
+    80: 'Slight rain showers',
+    81: 'Moderate rain showers',
+    82: 'Violent rain showers',
+    85: 'Slight snow showers',
+    86: 'Heavy snow showers',
+    95: 'Thunderstorm',
+    96: 'Thunderstorm with light hail',
+    99: 'Thunderstorm with heavy hail'
+  };
+  return mapping[code] || 'Unspecified weather';
+}
+
 export async function GET() {
   try {
     const sql = getDb();
@@ -75,9 +109,38 @@ export async function GET() {
       });
     }
 
-    // Attempt to call real API if keys exist (e.g. OpenWeatherMap)
-    // For now, fallback to our clean, realistic mock forecast
-    const forecastData = getMockForecast();
+    // Fetch coordinates from system config (Munich defaults)
+    const latConfig = await sql`SELECT value FROM system_config WHERE key = 'latitude'`;
+    const lngConfig = await sql`SELECT value FROM system_config WHERE key = 'longitude'`;
+    const lat = latConfig.length > 0 ? latConfig[0].value : '48.137';
+    const lng = lngConfig.length > 0 ? lngConfig[0].value : '11.575';
+
+    let forecastData = [];
+    try {
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&daily=weather_code,temperature_2m_max,precipitation_sum,precipitation_probability_max&timezone=auto`;
+      const apiRes = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      if (apiRes.ok) {
+        const apiJson = await apiRes.json();
+        const daily = apiJson.daily || {};
+        const times = daily.time || [];
+        for (let i = 0; i < times.length; i++) {
+          const rawProb = daily.precipitation_probability_max ? daily.precipitation_probability_max[i] : 0;
+          forecastData.push({
+            forecast_date: times[i],
+            precipitation_probability: Number(rawProb) / 100, // Convert e.g. 90% to 0.90
+            expected_precipitation_mm: daily.precipitation_sum ? parseFloat(daily.precipitation_sum[i]) : 0.0,
+            temp_c: daily.temperature_2m_max ? parseFloat(daily.temperature_2m_max[i]) : 22.0,
+            description: getWeatherDescription(daily.weather_code ? daily.weather_code[i] : 0)
+          });
+        }
+      }
+    } catch (apiErr) {
+      console.error('Failed to fetch from Open-Meteo API, falling back to mock:', apiErr.message);
+    }
+
+    if (forecastData.length === 0) {
+      forecastData = getMockForecast();
+    }
 
     // Cache the forecast data into the database
     for (const day of forecastData) {

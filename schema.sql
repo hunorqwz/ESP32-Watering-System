@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS command_logs (
     error_details TEXT,                    -- Detailed error if publish failed
     duration_seconds INT,                  -- Calculated runtime on transition to OFF
     water_used_liters REAL,                 -- Calculated consumption on transition to OFF
+    start_volume_liters REAL,              -- Reservoir volume in liters when pump turned ON
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 

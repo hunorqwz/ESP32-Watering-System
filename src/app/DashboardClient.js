@@ -5,6 +5,22 @@ import mqtt from 'mqtt';
 import { Cylinder, Thermometer, Droplets, Sprout, RefreshCw, Settings, X, Plus, Trash2, Edit2, Wifi, Clock, CloudSun, Calendar } from 'lucide-react';
 import ActivityLog from '@/components/ActivityLog';
 import NotesModal from '@/components/NotesModal';
+
+const PumpIcon = ({ className }) => (
+  <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth="2.2" stroke="currentColor">
+    {/* Motor block with cooling fins */}
+    <rect x="2" y="8" width="10" height="8" rx="1.5" />
+    <path d="M5 8v8M8 8v8" />
+    {/* Connection coupler */}
+    <path d="M12 11.5h1.5v1H12z" />
+    {/* Impeller chamber */}
+    <circle cx="17" cy="12" r="3.5" />
+    {/* Water outlet (top) */}
+    <path d="M17 8.5V4h1.5" />
+    {/* Water inlet (bottom) */}
+    <path d="M17 15.5V20" />
+  </svg>
+);
  
 export default function Dashboard({ apiToken }) {
   const refreshIntervalRef = useRef(null);
@@ -45,6 +61,11 @@ export default function Dashboard({ apiToken }) {
   const [wifiPassword, setWifiPassword] = useState('');
   const [customInterval, setCustomInterval] = useState(15);
   const [intervalUnit, setIntervalUnit] = useState('minutes');
+  const [latitude, setLatitude] = useState(48.137);
+  const [longitude, setLongitude] = useState(11.575);
+  const [locationName, setLocationName] = useState('');
+  const [locationSearchQuery, setLocationSearchQuery] = useState('');
+  const [locationResults, setLocationResults] = useState([]);
  
   // Reservoir calibration forms
   const [reservoirUseDimensions, setReservoirUseDimensions] = useState(false);
@@ -110,6 +131,9 @@ export default function Dashboard({ apiToken }) {
             setReservoirLength(json.configs['reservoir_length_cm'] ? Number(json.configs['reservoir_length_cm']) : 70);
             setReservoirHeight(json.configs['reservoir_height_cm'] ? Number(json.configs['reservoir_height_cm']) : 50);
             setReservoirSensorOffset(json.configs['reservoir_sensor_offset_cm'] ? Number(json.configs['reservoir_sensor_offset_cm']) : 100);
+            setLatitude(json.configs['latitude'] ? Number(json.configs['latitude']) : 48.137);
+            setLongitude(json.configs['longitude'] ? Number(json.configs['longitude']) : 11.575);
+            setLocationName(json.configs['location_name'] || '');
 
             // Sync Data Fetch & Sync Interval config inputs
             const intervalMins = json.configs['telemetry_interval_minutes'] ? parseInt(json.configs['telemetry_interval_minutes'], 10) : 15;
@@ -542,6 +566,75 @@ export default function Dashboard({ apiToken }) {
       type: 'info',
       onConfirm: () => triggerCustomIntervalSave(totalMinutes)
     });
+  };
+
+  const handleLocationSearch = async () => {
+    if (!locationSearchQuery.trim()) {
+      showToast('Please enter a location name to search.', 'error');
+      return;
+    }
+    setTogglingConfig(true);
+    try {
+      const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(locationSearchQuery)}&count=5&language=en&format=json`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.results && json.results.length > 0) {
+          setLocationResults(json.results);
+        } else {
+          showToast('No matching locations found.', 'error');
+          setLocationResults([]);
+        }
+      } else {
+        showToast('Failed to connect to geocoding API.', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to search location:', err);
+      showToast('Network error searching for location.', 'error');
+    } finally {
+      setTogglingConfig(false);
+    }
+  };
+
+  const handleLocationSelect = async (loc) => {
+    const latStr = String(loc.latitude);
+    const lngStr = String(loc.longitude);
+    const nameStr = `${loc.name}${loc.admin1 ? ', ' + loc.admin1 : ''}, ${loc.country}`;
+
+    setTogglingConfig(true);
+    try {
+      const resLat = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'latitude', value: latStr })
+      });
+      const resLng = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'longitude', value: lngStr })
+      });
+      const resName = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'location_name', value: nameStr })
+      });
+
+      if (resLat.ok && resLng.ok && resName.ok) {
+        setLatitude(loc.latitude);
+        setLongitude(loc.longitude);
+        setLocationName(nameStr);
+        setLocationResults([]);
+        setLocationSearchQuery('');
+        showToast(`Location updated to ${loc.name}, ${loc.country}.`, 'success');
+        await fetchDashboardData();
+      } else {
+        showToast('Failed to save selected location settings.', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to save selected location:', err);
+      showToast('Network error saving selected location.', 'error');
+    } finally {
+      setTogglingConfig(false);
+    }
   };
 
   const handleReservoirSave = async () => {
@@ -1067,7 +1160,9 @@ export default function Dashboard({ apiToken }) {
           {/* Weather Forecast Card */}
           <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-3">
             <div className="flex justify-between items-center border-b border-zinc-100 pb-2">
-              <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">Local Weather Forecast</span>
+              <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">
+                Weather Forecast {data.configs?.['location_name'] ? `(${data.configs['location_name'].split(',')[0].trim()})` : ''}
+              </span>
               <CloudSun className="w-4 h-4 text-zinc-400" />
             </div>
             
@@ -1171,12 +1266,7 @@ export default function Dashboard({ apiToken }) {
                 return (
                   <div key={pump.id} className={`border rounded-xl p-5 flex justify-between items-center ${isActive ? 'bg-emerald-50/40 border-emerald-200 shadow-sm' : 'bg-white border-zinc-200 shadow-sm'}`}>
                     <div className="flex items-center gap-3">
-                      <svg className={`w-5 h-5 ${isActive ? 'text-emerald-500' : 'text-zinc-300'}`} fill="none" viewBox="0 0 24 24" strokeWidth="2.2" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 9h5v8H5z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 9V4h2v5M5 3h4" />
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M10 9l2-2h7a4 4 0 014 4v2a4 4 0 01-4 4h-7l-2-2v-6z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M14 7.5v9" />
-                      </svg>
+                      <PumpIcon className={`w-5 h-5 ${isActive ? 'text-emerald-500' : 'text-zinc-300'}`} />
                       <div>
                         <span className="text-sm font-semibold text-zinc-800 block leading-tight">{pump.name}</span>
                         <span className="text-[8px] text-zinc-400 font-mono">Pin: {pump.pin}</span>
@@ -1251,7 +1341,7 @@ export default function Dashboard({ apiToken }) {
                 {[
                   { id: 'network', label: 'Network Info', icon: Wifi },
                   { id: 'sensors', label: 'Sensors', icon: Sprout },
-                  { id: 'pumps', label: 'Pumps', icon: Settings },
+                  { id: 'pumps', label: 'Pumps', icon: PumpIcon },
                   { id: 'schedules', label: 'Schedules', icon: Clock },
                   { id: 'general', label: 'General Settings', icon: Cylinder }
                 ].map(tab => (
@@ -1583,6 +1673,60 @@ export default function Dashboard({ apiToken }) {
                           Save Interval
                         </button>
                       </div>
+                    </div>
+
+                    <div className="space-y-4 pt-4 border-t border-zinc-100 text-xs">
+                      <h5 className="font-bold text-zinc-700 text-xs uppercase tracking-wider">System Location (Weather Forecast)</h5>
+                      {locationName && (
+                        <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 p-2.5 rounded-lg flex items-center justify-between">
+                          <div>
+                            <span className="block font-bold text-[10px] uppercase tracking-wider text-emerald-600">Active Location</span>
+                            <span className="font-semibold text-xs">{locationName}</span>
+                            <span className="block text-[8px] text-emerald-600 font-mono mt-0.5">({latitude.toFixed(4)}°, {longitude.toFixed(4)}°)</span>
+                          </div>
+                        </div>
+                      )}
+                      
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">Search City/Town</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            placeholder="e.g. Budapest, London, Munich..."
+                            value={locationSearchQuery}
+                            onChange={(e) => setLocationSearchQuery(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleLocationSearch()}
+                            className="flex-1 bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 text-xs text-zinc-800 focus:outline-none focus:border-zinc-400 font-semibold"
+                          />
+                          <button
+                            onClick={handleLocationSearch}
+                            disabled={togglingConfig}
+                            className="bg-zinc-800 hover:bg-zinc-900 text-white font-semibold px-4 py-1.5 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
+                          >
+                            Search
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Search Results List */}
+                      {locationResults.length > 0 && (
+                        <div className="border border-zinc-100 rounded-lg divide-y divide-zinc-50 overflow-hidden bg-white shadow-sm max-h-48 overflow-y-auto">
+                          {locationResults.map((loc) => (
+                            <button
+                              key={loc.id}
+                              type="button"
+                              onClick={() => handleLocationSelect(loc)}
+                              className="w-full text-left p-2.5 hover:bg-zinc-50 transition flex justify-between items-center text-xs"
+                            >
+                              <div>
+                                <span className="font-semibold text-zinc-800 block">{loc.name}</span>
+                                <span className="text-[10px] text-zinc-400 block">{loc.admin1 ? loc.admin1 + ', ' : ''}{loc.country}</span>
+                              </div>
+                              <span className="text-[9px] text-zinc-400 font-mono">({loc.latitude.toFixed(2)}°, {loc.longitude.toFixed(2)}°)</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     <div className="space-y-4 pt-4 border-t border-zinc-100 text-xs">
