@@ -615,6 +615,9 @@ export default function Dashboard({ apiToken }) {
         const json = await res.json();
         if (json.success) {
           showToast(editingSensorId ? 'Sensor updated successfully.' : 'New sensor added successfully.', 'success');
+          if (json.warning) {
+            showToast(json.warning, 'warning');
+          }
           setEditingSensorId(null);
           setSensorName('');
           setSensorType('moisture');

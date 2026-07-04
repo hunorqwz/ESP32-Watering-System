@@ -78,7 +78,7 @@ export async function POST(request) {
       requestedPins.push(pinSecondary);
     }
 
-    // 1. Check for pin overlaps with other sensors
+    // 1. Check for pin overlaps with other sensors (allowed with soft warning)
     const sensorConflicts = id
       ? await sql`
           SELECT name FROM sensor_configs
@@ -90,11 +90,9 @@ export async function POST(request) {
           WHERE (pin = ANY(${requestedPins}::int[]) OR pin_secondary = ANY(${requestedPins}::int[]))
         `;
 
+    let warning = null;
     if (sensorConflicts.length > 0) {
-      return NextResponse.json(
-        { success: false, error: `GPIO Conflict: Pin is already allocated to sensor "${sensorConflicts[0].name}".` },
-        { status: 400 }
-      );
+      warning = `GPIO Warning: Pin is shared with sensor "${sensorConflicts[0].name}". Ensure this is a shared bus (e.g. I2C) or a combined sensor (e.g. DHT22).`;
     }
 
     // 2. Check for pin overlaps with configured pumps
@@ -123,7 +121,7 @@ export async function POST(request) {
         WHERE id = ${parseInt(id, 10)}
       `;
       await triggerReload();
-      return NextResponse.json({ success: true, message: 'Sensor configuration updated successfully.' });
+      return NextResponse.json({ success: true, message: 'Sensor configuration updated successfully.', warning });
     } else {
       // Insert new sensor config
       await sql`
@@ -131,7 +129,7 @@ export async function POST(request) {
         VALUES (${name}, ${type}, ${parsedPin}, ${pinSecondary}, ${sensor_group}, ${dry}, ${wet})
       `;
       await triggerReload();
-      return NextResponse.json({ success: true, message: 'Sensor added successfully.' });
+      return NextResponse.json({ success: true, message: 'Sensor added successfully.', warning });
     }
   } catch (error) {
     console.error('Failed to save sensor configuration:', error);
