@@ -51,6 +51,16 @@ export async function POST(request) {
       UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP
     `;
 
+    // Clear weather forecast cache if location settings change
+    if (key === 'latitude' || key === 'longitude' || key === 'location_name') {
+      try {
+        await sql`DELETE FROM weather_forecast_cache`;
+        console.log(`Cleared weather forecast cache due to location config update: ${key}`);
+      } catch (cacheErr) {
+        console.error('Failed to clear weather cache on location config update:', cacheErr);
+      }
+    }
+
     // Auto-calibrate water_level sensor dry/wet limits if reservoir heights change
     if (key === 'reservoir_height_cm' || key === 'reservoir_sensor_offset_cm') {
       try {

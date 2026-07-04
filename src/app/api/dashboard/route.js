@@ -57,6 +57,79 @@ export async function GET() {
       `
     ]);
 
+    let activeWeatherCache = [...weatherCache];
+
+    // Auto-populate weather cache in dashboard if missing/deleted (e.g. on location change)
+    if (activeWeatherCache.length < 3) {
+      try {
+        const latConfig = await sql`SELECT value FROM system_config WHERE key = 'latitude'`;
+        const lngConfig = await sql`SELECT value FROM system_config WHERE key = 'longitude'`;
+        const lat = latConfig.length > 0 ? latConfig[0].value : '48.137';
+        const lng = lngConfig.length > 0 ? lngConfig[0].value : '11.575';
+
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&daily=weather_code,temperature_2m_max,precipitation_sum,precipitation_probability_max&timezone=auto`;
+        const apiRes = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (apiRes.ok) {
+          const apiJson = await apiRes.json();
+          const daily = apiJson.daily || {};
+          const times = daily.time || [];
+          
+          const tempForecastData = [];
+          for (let i = 0; i < times.length; i++) {
+            const rawProb = daily.precipitation_probability_max ? daily.precipitation_probability_max[i] : 0;
+            const wCode = daily.weather_code ? daily.weather_code[i] : 0;
+            
+            const mapping = {
+              0: 'Clear sky', 1: 'Mainly clear', 2: 'Partly cloudy', 3: 'Overcast',
+              45: 'Fog', 48: 'Foggy rime', 51: 'Light drizzle', 53: 'Moderate drizzle',
+              55: 'Dense drizzle', 56: 'Light freezing drizzle', 57: 'Dense freezing drizzle',
+              61: 'Slight rain', 63: 'Moderate rain', 65: 'Heavy rain', 66: 'Light freezing rain',
+              67: 'Heavy freezing rain', 71: 'Slight snow fall', 73: 'Moderate snow fall',
+              75: 'Heavy snow fall', 77: 'Snow grains', 80: 'Slight rain showers',
+              81: 'Moderate rain showers', 82: 'Violent rain showers', 85: 'Slight snow showers',
+              86: 'Heavy snow showers', 95: 'Thunderstorm', 96: 'Thunderstorm with light hail',
+              99: 'Thunderstorm with heavy hail'
+            };
+            const description = mapping[wCode] || 'Unspecified weather';
+
+            tempForecastData.push({
+              forecast_date: times[i],
+              precipitation_probability: Number(rawProb) / 100,
+              expected_precipitation_mm: daily.precipitation_sum ? parseFloat(daily.precipitation_sum[i]) : 0.0,
+              temp_c: daily.temperature_2m_max ? parseFloat(daily.temperature_2m_max[i]) : 22.0,
+              description
+            });
+          }
+
+          for (const day of tempForecastData) {
+            await sql`
+              INSERT INTO weather_forecast_cache (forecast_date, precipitation_probability, expected_precipitation_mm, raw_payload, updated_at)
+              VALUES (
+                ${day.forecast_date}::date, 
+                ${day.precipitation_probability}, 
+                ${day.expected_precipitation_mm}, 
+                ${JSON.stringify({ temp_c: day.temp_c, description: day.description })}::jsonb,
+                CURRENT_TIMESTAMP
+              )
+              ON CONFLICT (forecast_date) DO UPDATE
+              SET 
+                precipitation_probability = EXCLUDED.precipitation_probability,
+                expected_precipitation_mm = EXCLUDED.expected_precipitation_mm,
+                raw_payload = EXCLUDED.raw_payload,
+                updated_at = CURRENT_TIMESTAMP
+            `;
+          }
+
+          activeWeatherCache = await sql`
+            SELECT * FROM weather_forecast_cache
+            ORDER BY forecast_date ASC
+          `;
+        }
+      } catch (err) {
+        console.error('Failed to auto-populate weather cache in dashboard route:', err.message);
+      }
+    }
+
     const pumpMap = {};
     pumps.forEach(p => {
       pumpMap[p.id] = { name: p.name, pin: p.pin };
@@ -149,7 +222,7 @@ export async function GET() {
         const nextDateStr = toLocalDateString(absoluteNextTime);
         
         // Search if we have weather cache for this target date
-        const forecastDay = weatherCache.find(w => {
+        const forecastDay = activeWeatherCache.find(w => {
           const wDateStr = toLocalDateString(w.forecast_date);
           return wDateStr === nextDateStr;
         });
@@ -244,7 +317,7 @@ export async function GET() {
       device_status: deviceStatus,
       configs: configMap,
       schedules: schedules,
-      weather_forecast: weatherCache.map(row => ({
+      weather_forecast: activeWeatherCache.map(row => ({
         forecast_date: toLocalDateString(row.forecast_date),
         precipitation_probability: parseFloat(row.precipitation_probability),
         expected_precipitation_mm: parseFloat(row.expected_precipitation_mm),
