@@ -72,6 +72,44 @@ export async function POST(request) {
     const parsedPinSecondary = pin_secondary !== undefined && pin_secondary !== null && String(pin_secondary).trim() !== '' ? parseInt(pin_secondary, 10) : null;
     const pinSecondary = isNaN(parsedPinSecondary) ? null : parsedPinSecondary;
 
+    // Collect list of requested pins to validate
+    const requestedPins = [parsedPin];
+    if (pinSecondary !== null) {
+      requestedPins.push(pinSecondary);
+    }
+
+    // 1. Check for pin overlaps with other sensors
+    const sensorConflicts = id
+      ? await sql`
+          SELECT name FROM sensor_configs
+          WHERE (pin = ANY(${requestedPins}::int[]) OR pin_secondary = ANY(${requestedPins}::int[]))
+            AND id != ${parseInt(id, 10)}
+        `
+      : await sql`
+          SELECT name FROM sensor_configs
+          WHERE (pin = ANY(${requestedPins}::int[]) OR pin_secondary = ANY(${requestedPins}::int[]))
+        `;
+
+    if (sensorConflicts.length > 0) {
+      return NextResponse.json(
+        { success: false, error: `GPIO Conflict: Pin is already allocated to sensor "${sensorConflicts[0].name}".` },
+        { status: 400 }
+      );
+    }
+
+    // 2. Check for pin overlaps with configured pumps
+    const pumpConflicts = await sql`
+      SELECT name FROM pump_configs
+      WHERE pin = ANY(${requestedPins}::int[])
+    `;
+
+    if (pumpConflicts.length > 0) {
+      return NextResponse.json(
+        { success: false, error: `GPIO Conflict: Pin is already allocated to pump "${pumpConflicts[0].name}".` },
+        { status: 400 }
+      );
+    }
+
     const dryVal = dry_limit !== undefined && dry_limit !== null && String(dry_limit).trim() !== '' ? parseInt(dry_limit, 10) : null;
     const wetVal = wet_limit !== undefined && wet_limit !== null && String(wet_limit).trim() !== '' ? parseInt(wet_limit, 10) : null;
     const dry = isNaN(dryVal) ? null : dryVal;

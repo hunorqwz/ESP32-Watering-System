@@ -73,10 +73,13 @@ export async function POST(request) {
 
   const sql = getDb();
 
+  let pumpName = 'Unknown Pump';
+  let pumpPin = 0;
+
   // Validate that the pump actually exists in database configuration
   try {
     const pumpRecord = await sql`
-      SELECT id FROM pump_configs WHERE id = ${parsedPump}
+      SELECT id, name, pin FROM pump_configs WHERE id = ${parsedPump}
     `;
     if (pumpRecord.length === 0) {
       return NextResponse.json(
@@ -84,6 +87,8 @@ export async function POST(request) {
         { status: 400 }
       );
     }
+    pumpName = pumpRecord[0].name;
+    pumpPin = pumpRecord[0].pin;
   } catch (dbErr) {
     console.error('Failed to verify pump existence in database:', dbErr);
     return NextResponse.json(
@@ -122,8 +127,8 @@ export async function POST(request) {
       console.error('EMQX publish rejected:', result);
       
       await sql`
-        INSERT INTO command_logs (pump, state, status, error_details)
-        VALUES (${parsedPump}, ${parsedState}, ${status}, ${errorDetails})
+        INSERT INTO command_logs (pump, pump_name, pump_pin, state, status, error_details)
+        VALUES (${parsedPump}, ${pumpName}, ${pumpPin}, ${parsedState}, ${status}, ${errorDetails})
       `;
 
       return NextResponse.json(
@@ -143,8 +148,8 @@ export async function POST(request) {
         WHERE id = ${parsedPump}
       `,
       sql`
-        INSERT INTO command_logs (pump, state, status, response_msg_id)
-        VALUES (${parsedPump}, ${parsedState}, ${status}, ${messageId})
+        INSERT INTO command_logs (pump, pump_name, pump_pin, state, status, response_msg_id)
+        VALUES (${parsedPump}, ${pumpName}, ${pumpPin}, ${parsedState}, ${status}, ${messageId})
       `
     ]);
 
@@ -158,8 +163,8 @@ export async function POST(request) {
 
     try {
       await sql`
-        INSERT INTO command_logs (pump, state, status, error_details)
-        VALUES (${parsedPump}, ${parsedState}, ${status}, ${errorDetails})
+        INSERT INTO command_logs (pump, pump_name, pump_pin, state, status, error_details)
+        VALUES (${parsedPump}, ${pumpName}, ${pumpPin}, ${parsedState}, ${status}, ${errorDetails})
       `;
     } catch (dbError) {
       console.error('Failed to write execution log to database:', dbError);

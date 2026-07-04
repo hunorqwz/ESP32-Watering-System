@@ -21,7 +21,8 @@ export async function POST(request) {
       'reservoir_use_dimensions',
       'reservoir_total_volume_liters',
       'reservoir_width_cm',
-      'reservoir_length_cm'
+      'reservoir_length_cm',
+      'reservoir_height_cm'
     ];
     if (!allowedKeys.includes(key)) {
       return NextResponse.json(

@@ -69,6 +69,38 @@ export async function POST(request) {
       );
     }
 
+    // 1. Check for pin overlaps with other pumps
+    const pumpConflicts = id
+      ? await sql`
+          SELECT name FROM pump_configs
+          WHERE pin = ${parsedPin}
+            AND id != ${parseInt(id, 10)}
+        `
+      : await sql`
+          SELECT name FROM pump_configs
+          WHERE pin = ${parsedPin}
+        `;
+
+    if (pumpConflicts.length > 0) {
+      return NextResponse.json(
+        { success: false, error: `GPIO Conflict: Pin is already allocated to pump "${pumpConflicts[0].name}".` },
+        { status: 400 }
+      );
+    }
+
+    // 2. Check for pin overlaps with configured sensors
+    const sensorConflicts = await sql`
+      SELECT name FROM sensor_configs
+      WHERE pin = ${parsedPin} OR pin_secondary = ${parsedPin}
+    `;
+
+    if (sensorConflicts.length > 0) {
+      return NextResponse.json(
+        { success: false, error: `GPIO Conflict: Pin is already allocated to sensor "${sensorConflicts[0].name}".` },
+        { status: 400 }
+      );
+    }
+
     if (id) {
       // Update existing pump config
       await sql`

@@ -1,4 +1,4 @@
-import { neon } from '@neondatabase/serverless';
+import { Client } from '@neondatabase/serverless';
 import fs from 'fs';
 import path from 'path';
 
@@ -30,30 +30,44 @@ if (!databaseUrl) {
   process.exit(1);
 }
 
+const isReset = process.argv.includes('--reset');
+
 async function initializeDatabase() {
   try {
+    console.log('Connecting to NeonDB via Client...');
+    const client = new Client({
+      connectionString: databaseUrl
+    });
+    await client.connect();
+
+    if (isReset) {
+      console.log('Reset flag provided. Dropping existing tables...');
+      const drops = [
+        'DROP TABLE IF EXISTS sensor_readings CASCADE',
+        'DROP TABLE IF EXISTS command_logs CASCADE',
+        'DROP TABLE IF EXISTS sensor_logs CASCADE',
+        'DROP TABLE IF EXISTS system_config CASCADE',
+        'DROP TABLE IF EXISTS sensor_configs CASCADE',
+        'DROP TABLE IF EXISTS pump_configs CASCADE'
+      ];
+      for (const drop of drops) {
+        console.log(`Executing: ${drop}...`);
+        await client.query(drop);
+      }
+    }
+
     const schemaPath = path.resolve('schema.sql');
     if (!fs.existsSync(schemaPath)) {
       throw new Error(`schema.sql not found at ${schemaPath}`);
     }
 
     const sqlContent = fs.readFileSync(schemaPath, 'utf8');
-    
-    // Split schema file into individual SQL queries
-    const queries = sqlContent
-      .split(';')
-      .map(q => q.trim())
-      .filter(q => q.length > 0);
 
-    console.log('Connecting to NeonDB and executing schema queries...');
-    const sql = neon(databaseUrl);
-    
-    for (const query of queries) {
-      console.log(`Executing statement: ${query.split('\n')[0]}...`);
-      await sql.query(query);
-    }
+    console.log('Executing database schema...');
+    await client.query(sqlContent);
     
     console.log('Database initialization completed successfully.');
+    await client.end();
   } catch (error) {
     console.error('Failed to initialize database:', error);
     process.exit(1);

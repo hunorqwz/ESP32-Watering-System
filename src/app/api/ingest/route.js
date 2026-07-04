@@ -79,35 +79,35 @@ export async function POST(request) {
     // 2. Legacy Fallback Handler (If ESP32 sends the old format)
     else if (m1 !== undefined || m2 !== undefined || m3 !== undefined || m4 !== undefined || m5 !== undefined) {
       const legacyLogs = {
-        m1: Number(m1 || 0),
-        m2: Number(m2 || 0),
-        m3: Number(m3 || 0),
-        m4: Number(m4 || 0),
-        m5: Number(m5 || 0),
+        m1: m1 !== undefined && m1 !== null ? Number(m1) : null,
+        m2: m2 !== undefined && m2 !== null ? Number(m2) : null,
+        m3: m3 !== undefined && m3 !== null ? Number(m3) : null,
+        m4: m4 !== undefined && m4 !== null ? Number(m4) : null,
+        m5: m5 !== undefined && m5 !== null ? Number(m5) : null,
         temp: temp !== undefined && temp !== null ? Number(temp) : null,
         hum: hum !== undefined && hum !== null ? Number(hum) : null,
         water_level: finalWaterLevel !== undefined && finalWaterLevel !== null ? Number(finalWaterLevel) : null
       };
 
-      // Write to legacy sensor_logs table to support legacy tools
-      await sql`
-        INSERT INTO sensor_logs (
-          device_id, m1, m2, m3, m4, m5, temp, hum, water_level
-        ) VALUES (
-          ${deviceId}, ${legacyLogs.m1}, ${legacyLogs.m2}, ${legacyLogs.m3}, ${legacyLogs.m4}, ${legacyLogs.m5}, ${legacyLogs.temp}, ${legacyLogs.hum}, ${legacyLogs.water_level}
-        )
+      // Fetch dynamic configurations to map legacy logs parameters properly
+      const dbSensors = await sql`
+        SELECT id, type, name FROM sensor_configs 
+        ORDER BY id ASC
       `;
 
-      // Map to default seeded relational config IDs
-      // ID mappings: 1=Zone 1, 2=Zone 2, 3=Zone 3, 4=Zone 4, 5=Zone 5, 6=Temp, 7=Hum, 8=WaterLevel
-      processedReadings.push({ sensor_config_id: 1, value: legacyLogs.m1 });
-      processedReadings.push({ sensor_config_id: 2, value: legacyLogs.m2 });
-      processedReadings.push({ sensor_config_id: 3, value: legacyLogs.m3 });
-      processedReadings.push({ sensor_config_id: 4, value: legacyLogs.m4 });
-      processedReadings.push({ sensor_config_id: 5, value: legacyLogs.m5 });
-      if (legacyLogs.temp !== null) processedReadings.push({ sensor_config_id: 6, value: legacyLogs.temp });
-      if (legacyLogs.hum !== null) processedReadings.push({ sensor_config_id: 7, value: legacyLogs.hum });
-      if (legacyLogs.water_level !== null) processedReadings.push({ sensor_config_id: 8, value: legacyLogs.water_level });
+      const moistureSensors = dbSensors.filter(s => s.type === 'moisture');
+      const tempSensor = dbSensors.find(s => s.type === 'temperature');
+      const humSensor = dbSensors.find(s => s.type === 'humidity');
+      const waterSensor = dbSensors.find(s => s.type === 'water_level');
+
+      if (legacyLogs.m1 !== null && moistureSensors[0]) processedReadings.push({ sensor_config_id: moistureSensors[0].id, value: legacyLogs.m1 });
+      if (legacyLogs.m2 !== null && moistureSensors[1]) processedReadings.push({ sensor_config_id: moistureSensors[1].id, value: legacyLogs.m2 });
+      if (legacyLogs.m3 !== null && moistureSensors[2]) processedReadings.push({ sensor_config_id: moistureSensors[2].id, value: legacyLogs.m3 });
+      if (legacyLogs.m4 !== null && moistureSensors[3]) processedReadings.push({ sensor_config_id: moistureSensors[3].id, value: legacyLogs.m4 });
+      if (legacyLogs.m5 !== null && moistureSensors[4]) processedReadings.push({ sensor_config_id: moistureSensors[4].id, value: legacyLogs.m5 });
+      if (legacyLogs.temp !== null && tempSensor) processedReadings.push({ sensor_config_id: tempSensor.id, value: legacyLogs.temp });
+      if (legacyLogs.hum !== null && humSensor) processedReadings.push({ sensor_config_id: humSensor.id, value: legacyLogs.hum });
+      if (legacyLogs.water_level !== null && waterSensor) processedReadings.push({ sensor_config_id: waterSensor.id, value: legacyLogs.water_level });
     } else {
       return NextResponse.json(
         { success: false, error: 'Request must contain either an array of "readings" or legacy sensor parameters.' },

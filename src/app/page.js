@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import mqtt from 'mqtt';
 import { Cylinder, Thermometer, Droplets, Sprout, RefreshCw, Settings, X, Plus, Trash2, Edit2, Wifi } from 'lucide-react';
+import ActivityLog from '@/components/ActivityLog';
 
 export default function Dashboard() {
   const refreshIntervalRef = useRef(null);
@@ -12,6 +13,7 @@ export default function Dashboard() {
     latest_readings: {},
     history_readings: [],
     configs: {},
+    commands: [],
     device_status: { active: false, last_seen_seconds: null, interval_minutes: 15 }
   });
   const [loading, setLoading] = useState(true);
@@ -42,6 +44,7 @@ export default function Dashboard() {
   const [reservoirTotalVolume, setReservoirTotalVolume] = useState(100);
   const [reservoirWidth, setReservoirWidth] = useState(60);
   const [reservoirLength, setReservoirLength] = useState(70);
+  const [reservoirHeight, setReservoirHeight] = useState(50);
 
   // Sensor Form
   const [editingSensorId, setEditingSensorId] = useState(null);
@@ -89,6 +92,7 @@ export default function Dashboard() {
             setReservoirTotalVolume(json.configs['reservoir_total_volume_liters'] ? Number(json.configs['reservoir_total_volume_liters']) : 100);
             setReservoirWidth(json.configs['reservoir_width_cm'] ? Number(json.configs['reservoir_width_cm']) : 60);
             setReservoirLength(json.configs['reservoir_length_cm'] ? Number(json.configs['reservoir_length_cm']) : 70);
+            setReservoirHeight(json.configs['reservoir_height_cm'] ? Number(json.configs['reservoir_height_cm']) : 50);
           }
 
           // Sync last report time from latest reading timestamps
@@ -396,6 +400,7 @@ export default function Dashboard() {
         if (json.success) {
           setPumpsState(prev => ({ ...prev, [pumpId]: nextState }));
           showToast(`${data.pumps.find(p => p.id === pumpId)?.name || 'Pump'} turned ${nextState ? 'ON' : 'OFF'}.`, 'success');
+          fetchDashboardData();
         } else {
           showToast(json.error || 'Failed to toggle pump.', 'error');
         }
@@ -519,6 +524,10 @@ export default function Dashboard() {
         showToast('Please enter a valid positive number for tank length.', 'error');
         return;
       }
+      if (isNaN(reservoirHeight) || reservoirHeight <= 0) {
+        showToast('Please enter a valid positive number for tank height.', 'error');
+        return;
+      }
     } else {
       if (isNaN(reservoirTotalVolume) || reservoirTotalVolume <= 0) {
         showToast('Please enter a valid positive number for total volume.', 'error');
@@ -547,6 +556,11 @@ export default function Dashboard() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key: 'reservoir_length_cm', value: String(reservoirLength) })
+        }),
+        fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: 'reservoir_height_cm', value: String(reservoirHeight) })
         })
       ]);
 
@@ -739,48 +753,46 @@ export default function Dashboard() {
 
   const getReservoirStats = (rawDistance) => {
     const waterSensor = data.sensors?.find(s => s.type === 'water_level');
-    const emptyDist = waterSensor?.dry_limit || 100;
-    const fullDist = waterSensor?.wet_limit || 0;
+    const emptyDist = waterSensor?.dry_limit || 100; // Sensor distance to bottom
+    const fullDist = waterSensor?.wet_limit || 0;    // Sensor distance to full line
     const useDimensions = data.configs['reservoir_use_dimensions'] === 'true';
     const totalVolume = data.configs['reservoir_total_volume_liters'] ? parseFloat(data.configs['reservoir_total_volume_liters']) : 100;
     const width = data.configs['reservoir_width_cm'] ? parseFloat(data.configs['reservoir_width_cm']) : 60;
     const length = data.configs['reservoir_length_cm'] ? parseFloat(data.configs['reservoir_length_cm']) : 70;
+    const heightCm = data.configs['reservoir_height_cm'] ? parseFloat(data.configs['reservoir_height_cm']) : 50;
 
     if (rawDistance === undefined || rawDistance === null) {
-      return { percentage: 0, liters: 0, height: 0, capacity: totalVolume };
+      return { percentage: 0, liters: 0, height: 0, capacity: useDimensions ? Math.round((width * length * heightCm) / 100) / 10 : totalVolume };
     }
 
-    let span = 0;
-    let height = 0;
+    // Water level height from bottom of tank = sensor-to-bottom distance minus current raw sensor distance
+    let waterHeight = emptyDist - rawDistance;
+    if (waterHeight < 0) waterHeight = 0;
 
-    if (emptyDist > fullDist) {
-      span = emptyDist - fullDist;
-      height = emptyDist - rawDistance;
-    } else {
-      span = fullDist - emptyDist;
-      height = rawDistance - emptyDist;
-    }
-
-    if (span <= 0) return { percentage: 0, liters: 0, height: 0, capacity: totalVolume };
-
-    if (height < 0) height = 0;
-    if (height > span) height = span;
-
-    const percentage = Math.min(100, Math.max(0, Math.round((height / span) * 100)));
+    let percentage = 0;
     let liters = 0;
     let capacity = totalVolume;
 
     if (useDimensions) {
-      capacity = Math.round((width * length * span) / 100) / 10;
-      liters = Math.round((width * length * height) / 100) / 10;
+      // Cap at the physical height of the tank
+      if (waterHeight > heightCm) waterHeight = heightCm;
+      
+      percentage = Math.min(100, Math.max(0, Math.round((waterHeight / heightCm) * 100)));
+      capacity = Math.round((width * length * heightCm) / 100) / 10;
+      liters = Math.round((width * length * waterHeight) / 100) / 10;
     } else {
+      let span = emptyDist - fullDist;
+      if (span <= 0) span = 100;
+      
+      if (waterHeight > span) waterHeight = span;
+      percentage = Math.min(100, Math.max(0, Math.round((waterHeight / span) * 100)));
       liters = Math.round((totalVolume * (percentage / 100)) * 10) / 10;
     }
 
     return {
       percentage,
       liters,
-      height: Math.round(height * 10) / 10,
+      height: Math.round(waterHeight * 10) / 10,
       capacity
     };
   };
@@ -994,6 +1006,9 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+
+        {/* Recent Activity Log Section */}
+        <ActivityLog commands={data.commands} loading={loading} />
 
         {/* Footer Settings */}
         <footer className="flex justify-between items-center text-[10px] text-zinc-400 pt-6 border-t border-zinc-200">
@@ -1383,7 +1398,7 @@ export default function Dashboard() {
                       </div>
 
                       {reservoirUseDimensions ? (
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-3 gap-4">
                           <div>
                             <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Width (cm)</label>
                             <input
@@ -1401,6 +1416,16 @@ export default function Dashboard() {
                               min="1"
                               value={reservoirLength}
                               onChange={(e) => setReservoirLength(Number(e.target.value))}
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Height (cm)</label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={reservoirHeight}
+                              onChange={(e) => setReservoirHeight(Number(e.target.value))}
                               className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
                             />
                           </div>
