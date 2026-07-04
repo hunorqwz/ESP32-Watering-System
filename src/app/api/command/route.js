@@ -76,10 +76,12 @@ export async function POST(request) {
   let pumpName = 'Unknown Pump';
   let pumpPin = 0;
 
+  let flowRateLpm = 4.0;
+
   // Validate that the pump actually exists in database configuration
   try {
     const pumpRecord = await sql`
-      SELECT id, name, pin FROM pump_configs WHERE id = ${parsedPump}
+      SELECT id, name, pin, flow_rate_lpm FROM pump_configs WHERE id = ${parsedPump}
     `;
     if (pumpRecord.length === 0) {
       return NextResponse.json(
@@ -89,6 +91,9 @@ export async function POST(request) {
     }
     pumpName = pumpRecord[0].name;
     pumpPin = pumpRecord[0].pin;
+    flowRateLpm = pumpRecord[0].flow_rate_lpm !== null && pumpRecord[0].flow_rate_lpm !== undefined 
+      ? parseFloat(pumpRecord[0].flow_rate_lpm) 
+      : 4.0;
   } catch (dbErr) {
     console.error('Failed to verify pump existence in database:', dbErr);
     return NextResponse.json(
@@ -100,6 +105,28 @@ export async function POST(request) {
   let status = 'failed';
   let messageId = null;
   let errorDetails = null;
+
+  // Calculate duration and water usage if transitioning to OFF
+  let durationSeconds = null;
+  let waterUsedLiters = null;
+
+  if (parsedState === 0) {
+    try {
+      const lastOnLog = await sql`
+        SELECT created_at FROM command_logs
+        WHERE pump = ${parsedPump} AND state = 1 AND status = 'success'
+        ORDER BY created_at DESC LIMIT 1
+      `;
+      if (lastOnLog.length > 0) {
+        const onTime = new Date(lastOnLog[0].created_at).getTime();
+        const offTime = Date.now();
+        durationSeconds = Math.max(0, Math.floor((offTime - onTime) / 1000));
+        waterUsedLiters = Math.round(((durationSeconds / 60) * flowRateLpm) * 10) / 10;
+      }
+    } catch (calcErr) {
+      console.error('Failed to calculate pump runtime stats:', calcErr.message);
+    }
+  }
 
   try {
     const { authHeader, publishUrl } = getEmqxConfig(apiUrl, apiKey, apiSecret);
@@ -148,8 +175,8 @@ export async function POST(request) {
         WHERE id = ${parsedPump}
       `,
       sql`
-        INSERT INTO command_logs (pump, pump_name, pump_pin, state, status, response_msg_id)
-        VALUES (${parsedPump}, ${pumpName}, ${pumpPin}, ${parsedState}, ${status}, ${messageId})
+        INSERT INTO command_logs (pump, pump_name, pump_pin, state, status, response_msg_id, duration_seconds, water_used_liters)
+        VALUES (${parsedPump}, ${pumpName}, ${pumpPin}, ${parsedState}, ${status}, ${messageId}, ${durationSeconds}, ${waterUsedLiters})
       `
     ]);
 

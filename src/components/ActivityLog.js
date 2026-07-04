@@ -17,6 +17,14 @@ export default function ActivityLog({ commands = [], loading = false }) {
     return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   };
 
+  const formatDuration = (seconds) => {
+    if (seconds === null || seconds === undefined) return '';
+    if (seconds < 60) return `${seconds}s`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+  };
+
   return (
     <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-4">
       <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
@@ -53,11 +61,11 @@ export default function ActivityLog({ commands = [], loading = false }) {
                     )}
                     <div className="relative flex space-x-3">
                       <div>
-                        <span className={`h-8 w-8 rounded-full flex items-center justify-center ring-8 ring-white ${isSuccess ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>
+                        <span className={`h-8 w-8 bg-white flex items-center justify-center ${isSuccess ? 'text-emerald-600' : 'text-red-600'}`}>
                           {isSuccess ? (
-                            <CheckCircle2 className="w-4 h-4" strokeWidth={2.2} />
+                            <CheckCircle2 className="w-5 h-5" strokeWidth={2.2} />
                           ) : (
-                            <XCircle className="w-4 h-4" strokeWidth={2.2} />
+                            <XCircle className="w-5 h-5" strokeWidth={2.2} />
                           )}
                         </span>
                       </div>
@@ -70,6 +78,13 @@ export default function ActivityLog({ commands = [], loading = false }) {
                             <span className={`font-semibold ${log.state === 1 ? 'text-blue-600' : 'text-zinc-500'}`}>
                               {log.state === 1 ? 'ON' : 'OFF'}
                             </span>
+                            {isSuccess && log.state === 0 && log.duration_seconds !== null && (
+                              <span className="text-zinc-500 ml-1.5 font-medium">
+                                (Ran for {formatDuration(log.duration_seconds)}
+                                {log.water_used_liters !== null && ` • ${log.water_used_liters}L used`}
+                                )
+                              </span>
+                            )}
                           </p>
                           {!isSuccess && log.error_details && (
                             <p className="text-[10px] text-red-500 mt-0.5 font-mono max-w-md break-all leading-relaxed">

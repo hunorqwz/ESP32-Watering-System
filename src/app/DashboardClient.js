@@ -56,7 +56,6 @@ export default function Dashboard({ apiToken }) {
   const [sensorType, setSensorType] = useState('moisture');
   const [sensorPin, setSensorPin] = useState(32);
   const [sensorPinSecondary, setSensorPinSecondary] = useState('');
-  const [sensorGroup, setSensorGroup] = useState('Soil Moisture');
   const [sensorDryLimit, setSensorDryLimit] = useState(3400);
   const [sensorWetLimit, setSensorWetLimit] = useState(1100);
 
@@ -64,6 +63,8 @@ export default function Dashboard({ apiToken }) {
   const [editingPumpId, setEditingPumpId] = useState(null);
   const [pumpName, setPumpName] = useState('');
   const [pumpPin, setPumpPin] = useState(25);
+  const [pumpFlowRate, setPumpFlowRate] = useState(4.0);
+  const [reservoirSensorOffset, setReservoirSensorOffset] = useState(100);
 
   // Dynamic UI feedback states
   const [toasts, setToasts] = useState([]);
@@ -97,6 +98,17 @@ export default function Dashboard({ apiToken }) {
             setReservoirWidth(json.configs['reservoir_width_cm'] ? Number(json.configs['reservoir_width_cm']) : 60);
             setReservoirLength(json.configs['reservoir_length_cm'] ? Number(json.configs['reservoir_length_cm']) : 70);
             setReservoirHeight(json.configs['reservoir_height_cm'] ? Number(json.configs['reservoir_height_cm']) : 50);
+            setReservoirSensorOffset(json.configs['reservoir_sensor_offset_cm'] ? Number(json.configs['reservoir_sensor_offset_cm']) : 100);
+
+            // Sync Data Fetch & Sync Interval config inputs
+            const intervalMins = json.configs['telemetry_interval_minutes'] ? parseInt(json.configs['telemetry_interval_minutes'], 10) : 15;
+            if (intervalMins % 60 === 0 && intervalMins > 0) {
+              setCustomInterval(intervalMins / 60);
+              setIntervalUnit('hours');
+            } else {
+              setCustomInterval(intervalMins);
+              setIntervalUnit('minutes');
+            }
           }
 
           // Sync last report time from latest reading timestamps
@@ -504,25 +516,33 @@ export default function Dashboard({ apiToken }) {
   };
 
   const handleCustomIntervalSave = () => {
-    let totalMinutes = parseInt(customInterval, 10);
-    if (isNaN(totalMinutes) || totalMinutes <= 0) {
-      showToast('Please enter a valid positive telemetry sleep value.', 'error');
+    const minutes = parseInt(customInterval, 10);
+    if (isNaN(minutes) || minutes < 1) {
+      showToast('Please enter a valid interval duration.', 'error');
       return;
     }
-    if (intervalUnit === 'hours') {
-      totalMinutes = totalMinutes * 60;
-    }
+    const multiplier = intervalUnit === 'hours' ? 60 : 1;
+    const totalMinutes = minutes * multiplier;
 
     setConfirmDialog({
-      title: 'Update Telemetry Rate?',
-      message: `Are you sure you want to change the sleep cycle of the ESP32 to run every ${customInterval} ${intervalUnit}? Shorter intervals fetch data quicker but draw more battery power and increase database write operations.`,
-      confirmLabel: 'Update Rate',
+      title: 'Update Data Fetch & Sync Interval?',
+      message: `Are you sure you want to change the device's data fetch & sync interval to ${customInterval} ${intervalUnit} (${totalMinutes} minutes)? The next device sync will pull this configuration.`,
+      confirmLabel: 'Update Interval',
       type: 'info',
       onConfirm: () => triggerCustomIntervalSave(totalMinutes)
     });
   };
 
   const handleReservoirSave = async () => {
+    if (isNaN(reservoirHeight) || reservoirHeight <= 0) {
+      showToast('Please enter a valid positive number for tank height.', 'error');
+      return;
+    }
+    if (isNaN(reservoirSensorOffset) || reservoirSensorOffset <= 0) {
+      showToast('Please enter a valid positive number for sensor mounting offset.', 'error');
+      return;
+    }
+
     if (reservoirUseDimensions) {
       if (isNaN(reservoirWidth) || reservoirWidth <= 0) {
         showToast('Please enter a valid positive number for tank width.', 'error');
@@ -530,10 +550,6 @@ export default function Dashboard({ apiToken }) {
       }
       if (isNaN(reservoirLength) || reservoirLength <= 0) {
         showToast('Please enter a valid positive number for tank length.', 'error');
-        return;
-      }
-      if (isNaN(reservoirHeight) || reservoirHeight <= 0) {
-        showToast('Please enter a valid positive number for tank height.', 'error');
         return;
       }
     } else {
@@ -569,6 +585,11 @@ export default function Dashboard({ apiToken }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key: 'reservoir_height_cm', value: String(reservoirHeight) })
+        }),
+        fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: 'reservoir_sensor_offset_cm', value: String(reservoirSensorOffset) })
         })
       ]);
 
@@ -590,7 +611,7 @@ export default function Dashboard({ apiToken }) {
   };
 
   // Sensor Add/Edit Save
-  const handleSensorSave = async () => {
+  const handleSensorSave = async (force = false) => {
     if (!sensorName || !sensorType || sensorPin === undefined) {
       showToast('Please fill in all required sensor configuration fields.', 'error');
       return;
@@ -606,32 +627,34 @@ export default function Dashboard({ apiToken }) {
           type: sensorType,
           pin: parseInt(sensorPin, 10),
           pin_secondary: sensorType === 'water_level' && sensorPinSecondary !== '' ? parseInt(sensorPinSecondary, 10) : null,
-          sensor_group: sensorGroup || 'General',
           dry_limit: sensorType === 'moisture' || sensorType === 'water_level' ? parseInt(sensorDryLimit, 10) : null,
-          wet_limit: sensorType === 'moisture' || sensorType === 'water_level' ? parseInt(sensorWetLimit, 10) : null
+          wet_limit: sensorType === 'moisture' || sensorType === 'water_level' ? parseInt(sensorWetLimit, 10) : null,
+          force: force
         })
       });
-      if (res.ok) {
-        const json = await res.json();
+      const json = await res.json().catch(() => ({ success: false, error: 'Malformed response from server.' }));
+
+      if (res.ok || json.needsForce) {
         if (json.success) {
           showToast(editingSensorId ? 'Sensor updated successfully.' : 'New sensor added successfully.', 'success');
-          if (json.warning) {
-            showToast(json.warning, 'warning');
-          }
           setEditingSensorId(null);
           setSensorName('');
-          setSensorType('moisture');
           setSensorPin(32);
           setSensorPinSecondary('');
-          setSensorGroup('Soil Moisture');
-          setSensorDryLimit(3400);
-          setSensorWetLimit(1100);
           await fetchDashboardData();
+        } else if (json.needsForce) {
+          setConfirmDialog({
+            title: 'Confirm Shared Pin Mapping',
+            message: json.warning || 'A sensor already maps to this pin. Are you sure you want to share this pin mapping?',
+            confirmLabel: 'Proceed Anyway',
+            type: 'warning',
+            onConfirm: () => handleSensorSave(true)
+          });
         } else {
           showToast(json.error || 'Failed to save sensor configuration.', 'error');
         }
       } else {
-        showToast('Server failed to save sensor.', 'error');
+        showToast(json.error || 'Server failed to save sensor.', 'error');
       }
     } catch (err) {
       console.error('Failed to save sensor:', err);
@@ -683,7 +706,8 @@ export default function Dashboard({ apiToken }) {
         body: JSON.stringify({
           id: editingPumpId,
           name: pumpName,
-          pin: parseInt(pumpPin, 10)
+          pin: parseInt(pumpPin, 10),
+          flow_rate_lpm: parseFloat(pumpFlowRate)
         })
       });
       if (res.ok) {
@@ -693,6 +717,7 @@ export default function Dashboard({ apiToken }) {
           setEditingPumpId(null);
           setPumpName('');
           setPumpPin(25);
+          setPumpFlowRate(4.0);
           await fetchDashboardData();
         } else {
           showToast(json.error || 'Failed to save pump configuration.', 'error');
@@ -764,41 +789,34 @@ export default function Dashboard({ apiToken }) {
 
   const getReservoirStats = (rawDistance) => {
     const waterSensor = data.sensors?.find(s => s.type === 'water_level');
-    const emptyDist = waterSensor?.dry_limit || 100; // Sensor distance to bottom
-    const fullDist = waterSensor?.wet_limit || 0;    // Sensor distance to full line
+    const emptyDist = data.configs['reservoir_sensor_offset_cm']
+      ? parseFloat(data.configs['reservoir_sensor_offset_cm'])
+      : (waterSensor?.dry_limit || 100);
+    const heightCm = data.configs['reservoir_height_cm']
+      ? parseFloat(data.configs['reservoir_height_cm'])
+      : 50;
+
     const useDimensions = data.configs['reservoir_use_dimensions'] === 'true';
     const totalVolume = data.configs['reservoir_total_volume_liters'] ? parseFloat(data.configs['reservoir_total_volume_liters']) : 100;
     const width = data.configs['reservoir_width_cm'] ? parseFloat(data.configs['reservoir_width_cm']) : 60;
     const length = data.configs['reservoir_length_cm'] ? parseFloat(data.configs['reservoir_length_cm']) : 70;
-    const heightCm = data.configs['reservoir_height_cm'] ? parseFloat(data.configs['reservoir_height_cm']) : 50;
+
+    const calculatedCapacity = Math.round((width * length * heightCm) / 100) / 10;
+    const capacity = useDimensions ? calculatedCapacity : totalVolume;
 
     if (rawDistance === undefined || rawDistance === null) {
-      return { percentage: 0, liters: 0, height: 0, capacity: useDimensions ? Math.round((width * length * heightCm) / 100) / 10 : totalVolume };
+      return { percentage: 0, liters: 0, height: 0, capacity };
     }
 
-    // Water level height from bottom of tank = sensor-to-bottom distance minus current raw sensor distance
+    // Water level height from bottom of tank = sensor mounting offset minus raw sensor distance
     let waterHeight = emptyDist - rawDistance;
     if (waterHeight < 0) waterHeight = 0;
+    if (waterHeight > heightCm) waterHeight = heightCm;
 
-    let percentage = 0;
-    let liters = 0;
-    let capacity = totalVolume;
-
-    if (useDimensions) {
-      // Cap at the physical height of the tank
-      if (waterHeight > heightCm) waterHeight = heightCm;
-      
-      percentage = Math.min(100, Math.max(0, Math.round((waterHeight / heightCm) * 100)));
-      capacity = Math.round((width * length * heightCm) / 100) / 10;
-      liters = Math.round((width * length * waterHeight) / 100) / 10;
-    } else {
-      let span = emptyDist - fullDist;
-      if (span <= 0) span = 100;
-      
-      if (waterHeight > span) waterHeight = span;
-      percentage = Math.min(100, Math.max(0, Math.round((waterHeight / span) * 100)));
-      liters = Math.round((totalVolume * (percentage / 100)) * 10) / 10;
-    }
+    const percentage = Math.min(100, Math.max(0, Math.round((waterHeight / heightCm) * 100)));
+    const liters = useDimensions
+      ? Math.round((width * length * waterHeight) / 100) / 10
+      : Math.round((totalVolume * (percentage / 100)) * 10) / 10;
 
     return {
       percentage,
@@ -1162,7 +1180,7 @@ export default function Dashboard({ apiToken }) {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="text-[9px] font-semibold text-zinc-500 uppercase">
                             {sensorType === 'water_level' ? 'Trig Pin (Primary)' : 'ESP32 Pin'}
@@ -1185,39 +1203,30 @@ export default function Dashboard({ apiToken }) {
                             />
                           </div>
                         )}
-                        <div>
-                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Group Name</label>
-                          <input
-                            type="text"
-                            placeholder="e.g. Soil Moisture"
-                            value={sensorGroup}
-                            onChange={(e) => setSensorGroup(e.target.value)}
-                            className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none"
-                          />
-                        </div>
-                        {(sensorType === 'moisture' || sensorType === 'water_level') && (
-                          <div className="flex gap-2 col-span-3">
-                            <div className="w-1/2">
-                              <label className="text-[9px] font-semibold text-zinc-500 uppercase">Dry (Air) Limit</label>
-                              <input
-                                type="number"
-                                value={sensorDryLimit}
-                                onChange={(e) => setSensorDryLimit(e.target.value)}
-                                className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none font-mono"
-                              />
-                            </div>
-                            <div className="w-1/2">
-                              <label className="text-[9px] font-semibold text-zinc-500 uppercase">Wet (Water) Limit</label>
-                              <input
-                                type="number"
-                                value={sensorWetLimit}
-                                onChange={(e) => setSensorWetLimit(e.target.value)}
-                                className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none font-mono"
-                              />
-                            </div>
-                          </div>
-                        )}
                       </div>
+
+                      {(sensorType === 'moisture' || sensorType === 'water_level') && (
+                        <div className="flex gap-2 w-full mt-2">
+                          <div className="w-1/2">
+                            <label className="text-[9px] font-semibold text-zinc-500 uppercase">Dry (Air) Limit</label>
+                            <input
+                              type="number"
+                              value={sensorDryLimit}
+                              onChange={(e) => setSensorDryLimit(e.target.value)}
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none font-mono"
+                            />
+                          </div>
+                          <div className="w-1/2">
+                            <label className="text-[9px] font-semibold text-zinc-500 uppercase">Wet (Water) Limit</label>
+                            <input
+                              type="number"
+                              value={sensorWetLimit}
+                              onChange={(e) => setSensorWetLimit(e.target.value)}
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none font-mono"
+                            />
+                          </div>
+                        </div>
+                      )}
 
                       <div className="flex justify-end gap-2 pt-1">
                         {editingSensorId && (
@@ -1227,7 +1236,6 @@ export default function Dashboard({ apiToken }) {
                               setSensorName('');
                               setSensorPin(32);
                               setSensorPinSecondary('');
-                              setSensorGroup('Soil Moisture');
                             }}
                             className="bg-white border border-zinc-200 px-3 py-1.5 text-xs font-semibold rounded-lg"
                           >
@@ -1262,7 +1270,6 @@ export default function Dashboard({ apiToken }) {
                                 setSensorType(sensor.type);
                                 setSensorPin(sensor.pin);
                                 setSensorPinSecondary(sensor.pin_secondary !== null && sensor.pin_secondary !== undefined ? sensor.pin_secondary : '');
-                                setSensorGroup(sensor.sensor_group);
                                 setSensorDryLimit(sensor.dry_limit !== null && sensor.dry_limit !== undefined ? sensor.dry_limit : 3400);
                                 setSensorWetLimit(sensor.wet_limit !== null && sensor.wet_limit !== undefined ? sensor.wet_limit : 1100);
                               }}
@@ -1293,7 +1300,7 @@ export default function Dashboard({ apiToken }) {
                       <span className="font-bold text-zinc-700 block text-[11px] uppercase tracking-wider">
                         {editingPumpId ? 'Edit Pump Settings' : 'Add Custom Pump'}
                       </span>
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-3 gap-3">
                         <div>
                           <label className="text-[9px] font-semibold text-zinc-500 uppercase">Pump Name</label>
                           <input
@@ -1313,6 +1320,17 @@ export default function Dashboard({ apiToken }) {
                             className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none font-mono"
                           />
                         </div>
+                        <div>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Flow Rate (L/min)</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0.1"
+                            value={pumpFlowRate}
+                            onChange={(e) => setPumpFlowRate(e.target.value)}
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none font-mono"
+                          />
+                        </div>
                       </div>
 
                       <div className="flex justify-end gap-2 pt-1">
@@ -1322,6 +1340,7 @@ export default function Dashboard({ apiToken }) {
                               setEditingPumpId(null);
                               setPumpName('');
                               setPumpPin(25);
+                              setPumpFlowRate(4.0);
                             }}
                             className="bg-white border border-zinc-200 px-3 py-1.5 text-xs font-semibold rounded-lg"
                           >
@@ -1344,7 +1363,7 @@ export default function Dashboard({ apiToken }) {
                         <div key={pump.id} className="flex justify-between items-center text-xs bg-white border border-zinc-200 p-3 rounded-xl shadow-sm">
                           <div>
                             <span className="font-bold text-zinc-800 block">{pump.name}</span>
-                            <span className="text-[10px] text-zinc-400 font-mono">Pin Assignment: {pump.pin}</span>
+                            <span className="text-[10px] text-zinc-400 font-mono">Pin Assignment: {pump.pin} | Flow: {pump.flow_rate_lpm || 4.0} L/min</span>
                           </div>
                           <div className="flex gap-2">
                             <button
@@ -1352,6 +1371,7 @@ export default function Dashboard({ apiToken }) {
                                 setEditingPumpId(pump.id);
                                 setPumpName(pump.name);
                                 setPumpPin(pump.pin);
+                                setPumpFlowRate(pump.flow_rate_lpm !== null && pump.flow_rate_lpm !== undefined ? pump.flow_rate_lpm : 4.0);
                               }}
                               className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-zinc-50 rounded-lg text-zinc-600 transition"
                             >
@@ -1376,7 +1396,7 @@ export default function Dashboard({ apiToken }) {
                     <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wider border-b pb-1.5">General Config</h4>
                     
                     <div className="space-y-3">
-                      <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Telemetry Sleep Cycle</label>
+                      <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Data Fetch & Sync Interval</label>
                       <div className="flex items-center gap-2">
                         <input
                           type="number"
@@ -1404,57 +1424,93 @@ export default function Dashboard({ apiToken }) {
                       </div>
                     </div>
 
-                    <div className="space-y-4 pt-4 border-t border-zinc-100">
+                    <div className="space-y-4 pt-4 border-t border-zinc-100 text-xs">
                       <h5 className="font-bold text-zinc-700 text-xs uppercase tracking-wider">Water Reservoir Calibration</h5>
                       
-                      <div className="flex items-center gap-2 py-1">
-                        <input
-                          id="reservoir-use-dims"
-                          type="checkbox"
-                          checked={reservoirUseDimensions}
-                          onChange={(e) => setReservoirUseDimensions(e.target.checked)}
-                          className="rounded text-blue-600 focus:ring-blue-500 border-zinc-300 w-4 h-4 cursor-pointer"
-                        />
-                        <label htmlFor="reservoir-use-dims" className="text-xs text-zinc-700 font-semibold cursor-pointer">
-                          Calculate Volume using Tank Dimensions
-                        </label>
+                      {/* Height fields are mandatory and always at the top */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Depth / Height (cm)</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={reservoirHeight}
+                            onChange={(e) => setReservoirHeight(Number(e.target.value))}
+                            className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Sensor Mounting Offset (cm)</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={reservoirSensorOffset}
+                            onChange={(e) => setReservoirSensorOffset(Number(e.target.value))}
+                            className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                          />
+                        </div>
                       </div>
 
+                      {/* Calculation selector */}
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">Volume Calculation Method</label>
+                        <div className="grid grid-cols-2 gap-2 mt-1">
+                          <button
+                            type="button"
+                            onClick={() => setReservoirUseDimensions(false)}
+                            className={`py-1.5 px-3 text-xs font-semibold rounded-lg border transition cursor-pointer ${
+                              !reservoirUseDimensions
+                                ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
+                                : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50'
+                            }`}
+                          >
+                            By Liter Capacity
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setReservoirUseDimensions(true)}
+                            className={`py-1.5 px-3 text-xs font-semibold rounded-lg border transition cursor-pointer ${
+                              reservoirUseDimensions
+                                ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
+                                : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50'
+                            }`}
+                          >
+                            By Tank Dimensions
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Conditional Option Inputs */}
                       {reservoirUseDimensions ? (
-                        <div className="grid grid-cols-3 gap-4">
-                          <div>
-                            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Width (cm)</label>
-                            <input
-                              type="number"
-                              min="1"
-                              value={reservoirWidth}
-                              onChange={(e) => setReservoirWidth(Number(e.target.value))}
-                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
-                            />
+                        <div className="space-y-3 animate-in fade-in duration-200">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Width (cm)</label>
+                              <input
+                                type="number"
+                                min="1"
+                                value={reservoirWidth}
+                                onChange={(e) => setReservoirWidth(Number(e.target.value))}
+                                className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Length (cm)</label>
+                              <input
+                                type="number"
+                                min="1"
+                                value={reservoirLength}
+                                onChange={(e) => setReservoirLength(Number(e.target.value))}
+                                className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                              />
+                            </div>
                           </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Length (cm)</label>
-                            <input
-                              type="number"
-                              min="1"
-                              value={reservoirLength}
-                              onChange={(e) => setReservoirLength(Number(e.target.value))}
-                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Height (cm)</label>
-                            <input
-                              type="number"
-                              min="1"
-                              value={reservoirHeight}
-                              onChange={(e) => setReservoirHeight(Number(e.target.value))}
-                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
-                            />
+                          <div className="bg-zinc-50 border border-zinc-200 p-2.5 rounded-lg text-center font-semibold text-zinc-600">
+                            Estimated Tank Volume: <span className="text-zinc-900 font-mono">{(Math.round((reservoirWidth * reservoirLength * reservoirHeight) / 100) / 10).toFixed(1)}L</span>
                           </div>
                         </div>
                       ) : (
-                        <div>
+                        <div className="animate-in fade-in duration-200">
                           <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Total Volume Capacity (Liters)</label>
                           <input
                             type="number"
@@ -1469,7 +1525,7 @@ export default function Dashboard({ apiToken }) {
                       <button
                         onClick={handleReservoirSave}
                         disabled={togglingConfig}
-                        className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50 animate-in fade-in zoom-in-95 duration-100"
+                        className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50 mt-2"
                       >
                         Save Reservoir Settings
                       </button>

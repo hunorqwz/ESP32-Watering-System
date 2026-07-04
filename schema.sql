@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS pump_configs (
     name VARCHAR(100) NOT NULL,
     pin INT NOT NULL,
     state INT NOT NULL DEFAULT 0,          -- 0 = Off, 1 = On
+    flow_rate_lpm REAL DEFAULT 4.0,        -- Liters per minute flow rate
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -38,6 +39,8 @@ CREATE TABLE IF NOT EXISTS command_logs (
     status VARCHAR(20) NOT NULL,           -- 'success' or 'failed'
     response_msg_id VARCHAR(100),          -- EMQX message ID on success
     error_details TEXT,                    -- Detailed error if publish failed
+    duration_seconds INT,                  -- Calculated runtime on transition to OFF
+    water_used_liters REAL,                 -- Calculated consumption on transition to OFF
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -79,7 +82,8 @@ BEGIN
             ('reservoir_total_volume_liters', '100'),
             ('reservoir_width_cm', '60'),
             ('reservoir_length_cm', '70'),
-            ('reservoir_height_cm', '50');
+            ('reservoir_height_cm', '50'),
+            ('reservoir_sensor_offset_cm', '100');
     END IF;
 
     -- 2. Seed default sensors if empty
@@ -98,12 +102,12 @@ BEGIN
 
     -- 3. Seed default pumps if empty
     IF NOT EXISTS (SELECT 1 FROM pump_configs) THEN
-        INSERT INTO pump_configs (id, name, pin, state)
+        INSERT INTO pump_configs (id, name, pin, state, flow_rate_lpm)
         VALUES
-            (1, 'Pump 1', 25, 0),
-            (2, 'Pump 2', 26, 0),
-            (3, 'Pump 3', 18, 0),
-            (4, 'Pump 4', 19, 0);
+            (1, 'Pump 1', 25, 0, 4.0),
+            (2, 'Pump 2', 26, 0, 4.0),
+            (3, 'Pump 3', 18, 0, 4.0),
+            (4, 'Pump 4', 19, 0, 4.0);
     END IF;
 
     -- 4. Seed dynamic welcome note if empty

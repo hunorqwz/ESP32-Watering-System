@@ -47,15 +47,14 @@ async function triggerReload() {
   }
 }
 
-// Create or Update Sensor
 export async function POST(request) {
   try {
     const payload = await request.json();
-    const { id, name, type, pin, pin_secondary, sensor_group, dry_limit, wet_limit } = payload || {};
+    const { id, name, type, pin, pin_secondary, dry_limit, wet_limit, force } = payload || {};
 
-    if (!name || !type || pin === undefined || !sensor_group) {
+    if (!name || !type || pin === undefined) {
       return NextResponse.json(
-        { success: false, error: 'Missing parameters. name, type, pin, and sensor_group are required.' },
+        { success: false, error: 'Missing parameters. name, type, and pin are required.' },
         { status: 400 }
       );
     }
@@ -72,40 +71,78 @@ export async function POST(request) {
     const parsedPinSecondary = pin_secondary !== undefined && pin_secondary !== null && String(pin_secondary).trim() !== '' ? parseInt(pin_secondary, 10) : null;
     const pinSecondary = isNaN(parsedPinSecondary) ? null : parsedPinSecondary;
 
+    // Auto-calculate sensor group based on type
+    let calculatedGroup = 'General';
+    if (type === 'moisture') {
+      calculatedGroup = 'Soil Moisture';
+    } else if (type === 'temperature' || type === 'humidity') {
+      calculatedGroup = 'Environment';
+    } else if (type === 'water_level') {
+      calculatedGroup = 'Reservoir';
+    }
+
     // Collect list of requested pins to validate
     const requestedPins = [parsedPin];
     if (pinSecondary !== null) {
       requestedPins.push(pinSecondary);
     }
 
-    // 1. Check for pin overlaps with other sensors (allowed with soft warning)
+    // 1. Check for pin overlaps with other sensors
     const sensorConflicts = id
       ? await sql`
-          SELECT name FROM sensor_configs
+          SELECT name, type FROM sensor_configs
           WHERE (pin = ANY(${requestedPins}::int[]) OR pin_secondary = ANY(${requestedPins}::int[]))
             AND id != ${parseInt(id, 10)}
         `
       : await sql`
-          SELECT name FROM sensor_configs
+          SELECT name, type FROM sensor_configs
           WHERE (pin = ANY(${requestedPins}::int[]) OR pin_secondary = ANY(${requestedPins}::int[]))
         `;
 
-    let warning = null;
+    let hasHardConflict = false;
+    let hasSoftConflict = false;
+    let conflictDetails = '';
+
     if (sensorConflicts.length > 0) {
-      warning = `GPIO Warning: Pin is shared with sensor "${sensorConflicts[0].name}". Ensure this is a shared bus (e.g. I2C) or a combined sensor (e.g. DHT22).`;
+      for (const conflict of sensorConflicts) {
+        // Digital shareable types (like temp & humidity sharing a DHT22 pin or I2C bus)
+        const isShareableType = (type === 'temperature' || type === 'humidity') && 
+                                (conflict.type === 'temperature' || conflict.type === 'humidity');
+        if (!isShareableType) {
+          hasHardConflict = true;
+          conflictDetails = `GPIO Conflict: Pin is already allocated to sensor "${conflict.name}" (Type: ${conflict.type}). Analog or ultrasonic pins cannot be shared.`;
+          break;
+        } else {
+          hasSoftConflict = true;
+          conflictDetails = `GPIO Warning: Pin is shared with sensor "${conflict.name}". Ensure this is a shared bus (e.g. I2C) or a combined sensor (e.g. DHT22).`;
+        }
+      }
     }
 
-    // 2. Check for pin overlaps with configured pumps
+    // 2. Check for pin overlaps with configured pumps (always a hard block)
     const pumpConflicts = await sql`
       SELECT name FROM pump_configs
       WHERE pin = ANY(${requestedPins}::int[])
     `;
 
     if (pumpConflicts.length > 0) {
+      hasHardConflict = true;
+      conflictDetails = `GPIO Conflict: Pin is already allocated to pump "${pumpConflicts[0].name}". Pumps and sensors cannot share pins.`;
+    }
+
+    if (hasHardConflict) {
       return NextResponse.json(
-        { success: false, error: `GPIO Conflict: Pin is already allocated to pump "${pumpConflicts[0].name}".` },
+        { success: false, error: conflictDetails },
         { status: 400 }
       );
+    }
+
+    if (hasSoftConflict && force !== true) {
+      return NextResponse.json({
+        success: false,
+        needsForce: true,
+        warning: conflictDetails
+      });
     }
 
     const dryVal = dry_limit !== undefined && dry_limit !== null && String(dry_limit).trim() !== '' ? parseInt(dry_limit, 10) : null;
@@ -117,19 +154,19 @@ export async function POST(request) {
       // Update existing sensor config
       await sql`
         UPDATE sensor_configs 
-        SET name = ${name}, type = ${type}, pin = ${parsedPin}, pin_secondary = ${pinSecondary}, sensor_group = ${sensor_group}, dry_limit = ${dry}, wet_limit = ${wet}
+        SET name = ${name}, type = ${type}, pin = ${parsedPin}, pin_secondary = ${pinSecondary}, sensor_group = ${calculatedGroup}, dry_limit = ${dry}, wet_limit = ${wet}
         WHERE id = ${parseInt(id, 10)}
       `;
       await triggerReload();
-      return NextResponse.json({ success: true, message: 'Sensor configuration updated successfully.', warning });
+      return NextResponse.json({ success: true, message: 'Sensor configuration updated successfully.' });
     } else {
       // Insert new sensor config
       await sql`
         INSERT INTO sensor_configs (name, type, pin, pin_secondary, sensor_group, dry_limit, wet_limit)
-        VALUES (${name}, ${type}, ${parsedPin}, ${pinSecondary}, ${sensor_group}, ${dry}, ${wet})
+        VALUES (${name}, ${type}, ${parsedPin}, ${pinSecondary}, ${calculatedGroup}, ${dry}, ${wet})
       `;
       await triggerReload();
-      return NextResponse.json({ success: true, message: 'Sensor added successfully.', warning });
+      return NextResponse.json({ success: true, message: 'Sensor added successfully.' });
     }
   } catch (error) {
     console.error('Failed to save sensor configuration:', error);

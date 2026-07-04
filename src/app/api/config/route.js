@@ -22,7 +22,8 @@ export async function POST(request) {
       'reservoir_total_volume_liters',
       'reservoir_width_cm',
       'reservoir_length_cm',
-      'reservoir_height_cm'
+      'reservoir_height_cm',
+      'reservoir_sensor_offset_cm'
     ];
     if (!allowedKeys.includes(key)) {
       return NextResponse.json(
@@ -46,6 +47,37 @@ export async function POST(request) {
       ON CONFLICT (key) DO 
       UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP
     `;
+
+    // Auto-calibrate water_level sensor dry/wet limits if reservoir heights change
+    if (key === 'reservoir_height_cm' || key === 'reservoir_sensor_offset_cm') {
+      try {
+        const configs = await sql`
+          SELECT key, value FROM system_config
+          WHERE key IN ('reservoir_height_cm', 'reservoir_sensor_offset_cm')
+        `;
+        const configMap = {};
+        configs.forEach(c => {
+          configMap[c.key] = c.value;
+        });
+
+        const height = configMap['reservoir_height_cm'] ? parseFloat(configMap['reservoir_height_cm']) : 50;
+        const offset = configMap['reservoir_sensor_offset_cm'] ? parseFloat(configMap['reservoir_sensor_offset_cm']) : 100;
+
+        if (!isNaN(height) && !isNaN(offset)) {
+          const dryLimit = offset;
+          const wetLimit = Math.max(0, offset - height);
+
+          await sql`
+            UPDATE sensor_configs
+            SET dry_limit = ${dryLimit}, wet_limit = ${wetLimit}
+            WHERE type = 'water_level'
+          `;
+          console.log(`Auto-calibrated water_level sensor limits: dry_limit = ${dryLimit}, wet_limit = ${wetLimit}`);
+        }
+      } catch (syncErr) {
+        console.error('Failed to sync water_level sensor dry/wet limits:', syncErr);
+      }
+    }
 
     return NextResponse.json({
       success: true,

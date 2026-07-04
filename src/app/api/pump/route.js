@@ -51,7 +51,7 @@ async function triggerReload() {
 export async function POST(request) {
   try {
     const payload = await request.json();
-    const { id, name, pin } = payload || {};
+    const { id, name, pin, flow_rate_lpm } = payload || {};
 
     if (!name || pin === undefined) {
       return NextResponse.json(
@@ -68,6 +68,11 @@ export async function POST(request) {
         { status: 400 }
       );
     }
+
+    const parsedFlowRate = flow_rate_lpm !== undefined && flow_rate_lpm !== null && String(flow_rate_lpm).trim() !== ''
+      ? parseFloat(flow_rate_lpm)
+      : 4.0;
+    const finalFlowRate = isNaN(parsedFlowRate) || parsedFlowRate <= 0 ? 4.0 : parsedFlowRate;
 
     // 1. Check for pin overlaps with other pumps
     const pumpConflicts = id
@@ -105,7 +110,7 @@ export async function POST(request) {
       // Update existing pump config
       await sql`
         UPDATE pump_configs 
-        SET name = ${name}, pin = ${parsedPin}
+        SET name = ${name}, pin = ${parsedPin}, flow_rate_lpm = ${finalFlowRate}
         WHERE id = ${parseInt(id, 10)}
       `;
       await triggerReload();
@@ -113,8 +118,8 @@ export async function POST(request) {
     } else {
       // Insert new pump config
       await sql`
-        INSERT INTO pump_configs (name, pin)
-        VALUES (${name}, ${parsedPin})
+        INSERT INTO pump_configs (name, pin, flow_rate_lpm)
+        VALUES (${name}, ${parsedPin}, ${finalFlowRate})
       `;
       await triggerReload();
       return NextResponse.json({ success: true, message: 'Pump added successfully.' });
