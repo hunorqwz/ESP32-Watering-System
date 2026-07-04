@@ -8,11 +8,7 @@ export function getDb() {
     throw new Error('DATABASE_URL environment variable is missing.');
   }
   if (!cachedSql) {
-    cachedSql = neon(databaseUrl, {
-      fetchOptions: {
-        signal: AbortSignal.timeout(15000) // Fresh timeout signal per database request
-      }
-    });
+    cachedSql = neon(databaseUrl);
   }
   return cachedSql;
 }

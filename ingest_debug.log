@@ -4,3 +4,5 @@
 2026-07-03T16:39:17.397Z - RAW: {"deviceId":"esp32_test_local","m1":1500,"m2":2000,"m3":2500,"m4":3000,"m5":3200,"temp":24.5,"hum":40.2,"waterLevel":45}
 2026-07-04T08:09:09.460Z - RAW: {"deviceId":"esp32_test_local","m1":1500,"m2":2000,"m3":2500,"m4":3000,"m5":3200,"temp":24.5,"hum":40.2,"waterLevel":45}
 2026-07-04T08:13:13.443Z - RAW: {"deviceId":"esp32_test_local","m1":1500,"m2":2000,"m3":2500,"m4":3000,"m5":3200,"temp":24.5,"hum":40.2,"waterLevel":45}
+2026-07-04T14:58:01.790Z - RAW: {"deviceId":"esp32_test_local","m1":1500,"m2":2000,"m3":2500,"m4":3000,"m5":3200,"temp":24.5,"hum":40.2,"waterLevel":45}
+2026-07-04T14:58:21.182Z - RAW: {"deviceId":"esp32_test_local","m1":1500,"m2":2000,"m3":2500,"m4":3000,"m5":3200,"temp":24.5,"hum":40.2,"waterLevel":45}
