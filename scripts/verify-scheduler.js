@@ -49,7 +49,7 @@ async function runTests() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        pump_id: 1,
+        pump_ids: [1],
         time_of_day: '08:00',
         duration_seconds: 90,
         days_of_week: [testDayOfWeek],
@@ -66,7 +66,7 @@ async function runTests() {
 
     // Retrieve schedule ID from database
     const dbSched = await client.query(
-      "SELECT id FROM watering_schedules WHERE pump_id = 1 AND time_of_day = '08:00:00'"
+      "SELECT id FROM watering_schedules WHERE 1 = ANY(pump_ids) AND time_of_day = '08:00:00'"
     );
     createdScheduleId = dbSched.rows[0]?.id;
     console.log('Created test schedule ID:', createdScheduleId);

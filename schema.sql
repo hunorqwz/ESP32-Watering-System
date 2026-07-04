@@ -71,15 +71,13 @@ CREATE TABLE IF NOT EXISTS system_notes (
 -- Table for dynamic watering schedules
 CREATE TABLE IF NOT EXISTS watering_schedules (
     id SERIAL PRIMARY KEY,
-    pump_id INT NOT NULL REFERENCES pump_configs(id) ON DELETE CASCADE,
+    pump_ids INT[] NOT NULL,               -- e.g. [1, 2] targeting multiple pumps
     time_of_day TIME NOT NULL,
     duration_seconds INT NOT NULL CHECK (duration_seconds > 0),
     days_of_week INT[] NOT NULL,           -- e.g. [1, 2, 3, 4, 5, 6, 7] where 1 = Monday, 7 = Sunday
     enabled BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE INDEX IF NOT EXISTS idx_watering_schedules_pump ON watering_schedules (pump_id);
 
 -- Table for caching weather forecasts to respect rate limits
 CREATE TABLE IF NOT EXISTS weather_forecast_cache (

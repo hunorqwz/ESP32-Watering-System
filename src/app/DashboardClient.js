@@ -71,7 +71,7 @@ export default function Dashboard({ apiToken }) {
 
   // Schedule Form State
   const [editingScheduleId, setEditingScheduleId] = useState(null);
-  const [schedPumpId, setSchedPumpId] = useState('');
+  const [schedPumpIds, setSchedPumpIds] = useState([]);
   const [schedTime, setSchedTime] = useState('07:00');
   const [schedDuration, setSchedDuration] = useState(120);
   const [schedDays, setSchedDays] = useState([1, 2, 3, 4, 5, 6, 7]);
@@ -775,8 +775,8 @@ export default function Dashboard({ apiToken }) {
 
   // Schedule Add/Edit/Save
   const handleScheduleSave = async () => {
-    if (!schedPumpId || !schedTime || !schedDuration || schedDays.length === 0) {
-      showToast('Please select a pump, time, duration, and at least one day.', 'error');
+    if (schedPumpIds.length === 0 || !schedTime || !schedDuration || schedDays.length === 0) {
+      showToast('Please select at least one pump, time, duration, and at least one day.', 'error');
       return;
     }
 
@@ -786,7 +786,7 @@ export default function Dashboard({ apiToken }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: editingScheduleId,
-          pump_id: parseInt(schedPumpId, 10),
+          pump_ids: schedPumpIds,
           time_of_day: schedTime,
           duration_seconds: parseInt(schedDuration, 10),
           days_of_week: schedDays,
@@ -799,7 +799,7 @@ export default function Dashboard({ apiToken }) {
         if (json.success) {
           showToast(editingScheduleId ? 'Schedule updated successfully.' : 'New schedule added successfully.', 'success');
           setEditingScheduleId(null);
-          setSchedPumpId('');
+          setSchedPumpIds([]);
           setSchedTime('07:00');
           setSchedDuration(120);
           setSchedDays([1, 2, 3, 4, 5, 6, 7]);
@@ -1704,22 +1704,10 @@ export default function Dashboard({ apiToken }) {
                       <span className="font-bold text-zinc-700 block text-[11px] uppercase tracking-wider">
                         {editingScheduleId ? 'Edit Watering Schedule' : 'Add Custom Watering Schedule'}
                       </span>
-                      <div className="grid grid-cols-3 gap-3">
+                      
+                      <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Target Pump</label>
-                          <select
-                            value={schedPumpId}
-                            onChange={(e) => setSchedPumpId(e.target.value)}
-                            className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2 mt-0.5 focus:outline-none"
-                          >
-                            <option value="">Select Pump...</option>
-                            {data.pumps.map(p => (
-                              <option key={p.id} value={p.id}>{p.name}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Time of Day (24h)</label>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Time of Day</label>
                           <input
                             type="time"
                             value={schedTime}
@@ -1737,6 +1725,34 @@ export default function Dashboard({ apiToken }) {
                             onChange={(e) => setSchedDuration(parseInt(e.target.value, 10))}
                             className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2 mt-0.5 focus:outline-none font-mono"
                           />
+                        </div>
+                      </div>
+
+                      {/* Multi-pump Selection Toggles */}
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] font-semibold text-zinc-500 uppercase block">Target Pumps</label>
+                        <div className="flex flex-wrap gap-1.5 mt-0.5">
+                          {data.pumps.map(p => {
+                            const isSelected = schedPumpIds.includes(p.id);
+                            return (
+                              <button
+                                key={p.id}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    setSchedPumpIds(prev => prev.filter(v => v !== p.id));
+                                  } else {
+                                    setSchedPumpIds(prev => [...prev, p.id].sort());
+                                  }
+                                }}
+                                className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer ${
+                                  isSelected ? 'bg-blue-600 border-blue-600 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50'
+                                }`}
+                              >
+                                {p.name}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
 
@@ -1776,24 +1792,12 @@ export default function Dashboard({ apiToken }) {
                         </div>
                       </div>
 
-                      {/* Enabled state switch */}
-                      <div className="flex items-center gap-2 pt-1">
-                        <label className="text-[9px] font-semibold text-zinc-500 uppercase">Schedule Enabled</label>
-                        <button
-                          type="button"
-                          onClick={() => setSchedEnabled(prev => !prev)}
-                          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${schedEnabled ? 'bg-blue-600' : 'bg-zinc-200'}`}
-                        >
-                          <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${schedEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
-                        </button>
-                      </div>
-
                       <div className="flex justify-end gap-2 pt-1">
                         {editingScheduleId && (
                           <button
                             onClick={() => {
                               setEditingScheduleId(null);
-                              setSchedPumpId('');
+                              setSchedPumpIds([]);
                               setSchedTime('07:00');
                               setSchedDuration(120);
                               setSchedDays([1, 2, 3, 4, 5, 6, 7]);
@@ -1833,26 +1837,62 @@ export default function Dashboard({ apiToken }) {
                                   Days: {activeDaysStr} | Duration: {sched.duration_seconds}s
                                 </span>
                               </div>
-                              <div className="flex gap-2">
+                              <div className="flex items-center gap-3">
+                                {/* Pause / Resume Switch */}
                                 <button
-                                  onClick={() => {
-                                    setEditingScheduleId(sched.id);
-                                    setSchedPumpId(sched.pump_id);
-                                    setSchedTime(sched.time_of_day.substring(0, 5));
-                                    setSchedDuration(sched.duration_seconds);
-                                    setSchedDays(sched.days_of_week);
-                                    setSchedEnabled(sched.enabled);
+                                  type="button"
+                                  title={sched.enabled ? "Pause schedule" : "Resume schedule"}
+                                  onClick={async () => {
+                                    try {
+                                      const nextEnabled = !sched.enabled;
+                                      const res = await fetch('/api/schedule', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                          id: sched.id,
+                                          pump_ids: sched.pump_ids || (sched.pumps || []).map(p => p.id),
+                                          time_of_day: sched.time_of_day,
+                                          duration_seconds: sched.duration_seconds,
+                                          days_of_week: sched.days_of_week,
+                                          enabled: nextEnabled
+                                        })
+                                      });
+                                      if (res.ok) {
+                                        showToast(`Schedule ${nextEnabled ? 'enabled' : 'paused'}.`, 'success');
+                                        fetchDashboardData();
+                                      } else {
+                                        showToast('Failed to toggle schedule status.', 'error');
+                                      }
+                                    } catch (err) {
+                                      showToast('Error toggling schedule.', 'error');
+                                    }
                                   }}
-                                  className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-zinc-50 rounded-lg text-zinc-600 transition"
+                                  className={`relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${sched.enabled ? 'bg-blue-600' : 'bg-zinc-200'}`}
                                 >
-                                  <Edit2 className="w-3.5 h-3.5" />
+                                  <span className={`pointer-events-none inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${sched.enabled ? 'translate-x-3.5' : 'translate-x-0'}`} />
                                 </button>
-                                <button
-                                  onClick={() => handleScheduleDelete(sched.id)}
-                                  className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-red-50 text-red-500 rounded-lg transition"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                                
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => {
+                                      setEditingScheduleId(sched.id);
+                                      setSchedPumpIds(sched.pump_ids || (sched.pumps || []).map(p => p.id) || []);
+                                      setSchedTime(sched.time_of_day.substring(0, 5));
+                                      setSchedDuration(sched.duration_seconds);
+                                      setSchedDays(sched.days_of_week);
+                                      setSchedEnabled(sched.enabled);
+                                    }}
+                                    className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-zinc-50 rounded-lg text-zinc-600 transition"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleScheduleDelete(sched.id)}
+                                    className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-red-50 text-red-500 rounded-lg transition"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           );

@@ -17,7 +17,7 @@ export async function GET() {
     const sql = getDb();
 
     // Fetch all metadata configs, latest values, commands, and system configs concurrently
-    const [sensors, pumps, latestReadings, commands, configs, schedules, weatherCache] = await Promise.all([
+    const [sensors, pumps, latestReadings, commands, configs, rawSchedules, weatherCache] = await Promise.all([
       // 1. Fetch sensor configurations
       sql`
         SELECT * FROM sensor_configs 
@@ -47,10 +47,8 @@ export async function GET() {
       `,
       // 6. Fetch all schedules
       sql`
-        SELECT s.*, p.name as pump_name 
-        FROM watering_schedules s
-        JOIN pump_configs p ON s.pump_id = p.id
-        ORDER BY s.time_of_day ASC
+        SELECT * FROM watering_schedules
+        ORDER BY time_of_day ASC
       `,
       // 7. Fetch cached weather forecasts
       sql`
@@ -58,6 +56,27 @@ export async function GET() {
         ORDER BY forecast_date ASC
       `
     ]);
+
+    const pumpMap = {};
+    pumps.forEach(p => {
+      pumpMap[p.id] = { name: p.name, pin: p.pin };
+    });
+
+    const schedules = rawSchedules.map(s => {
+      const targetPumps = (s.pump_ids || []).map(id => ({
+        id,
+        name: pumpMap[id]?.name || `Pump ${id}`,
+        pin: pumpMap[id]?.pin || 0
+      }));
+      return {
+        ...s,
+        pumps: targetPumps,
+        pump_name: targetPumps.map(p => p.name).join(', '),
+        pump_pin: targetPumps.map(p => p.pin).join(', '),
+        // Fallback for single pump fields
+        pump_id: s.pump_ids && s.pump_ids.length > 0 ? s.pump_ids[0] : null
+      };
+    });
 
     // Map system configs into key-value map
     const configMap = {};
