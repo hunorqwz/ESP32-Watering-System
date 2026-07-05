@@ -156,7 +156,7 @@ BEGIN
     -- 5. Seed default user if empty
     IF NOT EXISTS (SELECT 1 FROM users) THEN
         INSERT INTO users (username, password_hash, email)
-        VALUES ('admin', '$2b$10$jPScj94sqEX1NoXwYPtUCuQ8oAJSoBW9.U3Ninid.Lco/EeLZzzlW', 'admin@example.com');
+        VALUES ('admin', '$2b$10$6XOSZsZUig6nf9qA1BVjO.bfhosbVa7VVP.soJTyiecymkSTxBPTC', 'admin@example.com');
     END IF;
 END $$;
 

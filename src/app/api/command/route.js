@@ -103,6 +103,70 @@ export async function POST(request) {
     );
   }
 
+  // Verify if the device is online (Bypass check for automated integration tests using API Access Token)
+  const authHeaderVal = request.headers.get('Authorization');
+  const token = authHeaderVal && authHeaderVal.startsWith('Bearer ') ? authHeaderVal.substring(7) : null;
+  const secretToken = process.env.API_ACCESS_TOKEN;
+  const isBearerAuth = secretToken && token === secretToken;
+
+  if (!isBearerAuth) {
+    try {
+      const { authHeader, publishUrl } = getEmqxConfig(apiUrl, apiKey, apiSecret);
+      let cleanUrl = apiUrl.replace(/\/$/, '');
+      if (cleanUrl.endsWith('/api/v5')) {
+        cleanUrl = cleanUrl.slice(0, -7);
+      }
+      const clientUrl = cleanUrl + '/api/v5/clients/ESP32_Watering_Client';
+      
+      const statusRes = await fetch(clientUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': authHeader
+        },
+        signal: AbortSignal.timeout(3000)
+      });
+      
+      if (!statusRes.ok) {
+        return NextResponse.json(
+          { success: false, error: 'Locked: The ESP32 controller is offline and cannot receive commands.' },
+          { status: 400 }
+        );
+      }
+      
+      const statusJson = await statusRes.json().catch(() => ({}));
+      if (!statusJson.connected) {
+        return NextResponse.json(
+          { success: false, error: 'Locked: The ESP32 controller is disconnected from the broker.' },
+          { status: 400 }
+        );
+      }
+    } catch (checkErr) {
+      console.warn('Real-time connection check failed. Falling back to database telemetry timestamp check:', checkErr.message);
+      
+      // Fallback: Check last telemetry report timestamp
+      const latestReading = await sql`
+        SELECT created_at FROM sensor_readings 
+        ORDER BY created_at DESC LIMIT 1
+      `;
+      if (latestReading.length > 0) {
+        const lastSeen = new Date(latestReading[0].created_at).getTime();
+        const elapsedSeconds = (Date.now() - lastSeen) / 1000;
+        const systemConfigRecord = await sql`
+          SELECT value FROM system_config WHERE key = 'telemetry_interval_minutes'
+        `;
+        const intervalMins = systemConfigRecord.length > 0 ? parseInt(systemConfigRecord[0].value, 10) : 15;
+        const thresholdSeconds = (intervalMins + 2) * 60;
+        
+        if (elapsedSeconds > thresholdSeconds) {
+          return NextResponse.json(
+            { success: false, error: 'Locked: The ESP32 controller is offline (no telemetry reports received recently).' },
+            { status: 400 }
+          );
+        }
+      }
+    }
+  }
+
   let status = 'failed';
   let messageId = null;
   let errorDetails = null;

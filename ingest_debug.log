@@ -20,3 +20,5 @@
 2026-07-05T11:10:48.326Z - RAW: {"deviceId":"esp32_test_local","readings":[{"sensorId":8,"value":90}]}
 2026-07-05T11:38:22.313Z - RAW: {"deviceId":"esp32_test_local","readings":[{"sensorId":8,"value":20}]}
 2026-07-05T11:38:23.211Z - RAW: {"deviceId":"esp32_test_local","readings":[{"sensorId":8,"value":90}]}
+2026-07-05T14:27:18.814Z - RAW: {"deviceId":"esp32_test_local","readings":[{"sensorId":8,"value":20}]}
+2026-07-05T14:27:19.525Z - RAW: {"deviceId":"esp32_test_local","readings":[{"sensorId":8,"value":90}]}
