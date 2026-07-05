@@ -225,8 +225,8 @@ void fetchConfiguration() {
   if (httpCode == HTTP_CODE_OK) {
     String payload = http.getString();
     
-    // Increased document size to 4096 to handle dynamic schedules parsing
-    StaticJsonDocument<4096> doc;
+    // Dynamic allocation to support scaling schedule configurations cleanly on heap
+    DynamicJsonDocument doc(8192);
     DeserializationError error = deserializeJson(doc, payload);
     
     if (error) {
@@ -413,8 +413,8 @@ void sendTelemetry() {
     Serial.println("Skipped Telemetry: No sensors assigned.");
     return;
   }
-  
-  StaticJsonDocument<1024> doc;
+  // Dynamic allocation to support multiple sensors scaling on heap safely
+  DynamicJsonDocument doc(2048);
   doc["deviceId"] = "ESP32_01";
   JsonArray readingsArr = doc.createNestedArray("readings");
 
@@ -446,7 +446,8 @@ void sendTelemetry() {
 
 // --- MQTT Commands/Config Callback ---
 void callback(char* topic, byte* payload, unsigned int length) {
-  StaticJsonDocument<512> doc;
+  // Heap allocation to prevent stack overflow on dynamic command payloads
+  DynamicJsonDocument doc(1024);
   DeserializationError error = deserializeJson(doc, payload, length);
   if (error) {
     Serial.println("Failed to parse incoming command JSON.");
