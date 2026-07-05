@@ -5,13 +5,16 @@ import { getDb } from '@/lib/db';
 export async function GET() {
   try {
     const sql = getDb();
-    const [schedules, pumps] = await Promise.all([
+    const [schedules, pumps, flows] = await Promise.all([
       sql`
         SELECT * FROM watering_schedules
         ORDER BY time_of_day ASC, id ASC
       `,
       sql`
         SELECT id, name, pin FROM pump_configs
+      `,
+      sql`
+        SELECT id, name FROM watering_flows
       `
     ]);
 
@@ -20,17 +23,28 @@ export async function GET() {
       pumpMap[p.id] = { name: p.name, pin: p.pin };
     });
 
+    const flowMap = {};
+    flows.forEach(f => {
+      flowMap[f.id] = { name: f.name };
+    });
+
     const formattedSchedules = schedules.map(s => {
       const targetPumps = (s.pump_ids || []).map(id => ({
         id,
         name: pumpMap[id]?.name || `Pump ${id}`,
         pin: pumpMap[id]?.pin || 0
       }));
+      const targetFlows = (s.flow_ids || []).map(id => ({
+        id,
+        name: flowMap[id]?.name || `Flow ${id}`
+      }));
       return {
         ...s,
         pumps: targetPumps,
         pump_name: targetPumps.map(p => p.name).join(', '),
         pump_pin: targetPumps.map(p => p.pin).join(', '),
+        flows: targetFlows,
+        flow_name: targetFlows.map(f => f.name).join(', '),
         // Fallback for older code referencing single pump_id
         pump_id: s.pump_ids && s.pump_ids.length > 0 ? s.pump_ids[0] : null
       };
@@ -50,17 +64,19 @@ export async function GET() {
 export async function POST(request) {
   try {
     const payload = await request.json();
-    const { id, pump_id, pump_ids, time_of_day, duration_seconds, days_of_week, enabled } = payload || {};
+    const { id, pump_id, pump_ids, flow_ids, time_of_day, duration_seconds, days_of_week, enabled, cycles, soak_duration_seconds } = payload || {};
 
-    if ((pump_id === undefined && !Array.isArray(pump_ids)) || !time_of_day || duration_seconds === undefined || !Array.isArray(days_of_week)) {
+    if ((pump_id === undefined && !Array.isArray(pump_ids) && !Array.isArray(flow_ids)) || !time_of_day || duration_seconds === undefined || !Array.isArray(days_of_week)) {
       return NextResponse.json(
-        { success: false, error: 'Missing required parameters. pump_ids, time_of_day, duration_seconds, and days_of_week are required.' },
+        { success: false, error: 'Missing required parameters. flow_ids, time_of_day, duration_seconds, and days_of_week are required.' },
         { status: 400 }
       );
     }
 
     const parsedDuration = parseInt(duration_seconds, 10);
     const isEnabled = enabled !== false; // default true
+    const parsedCycles = parseInt(cycles, 10) || 1;
+    const parsedSoak = parseInt(soak_duration_seconds, 10) || 0;
 
     if (isNaN(parsedDuration) || parsedDuration <= 0) {
       return NextResponse.json(
@@ -69,7 +85,13 @@ export async function POST(request) {
       );
     }
 
-    // Parse pump_ids array
+    // Parse flow_ids array
+    let targetFlowIds = [];
+    if (Array.isArray(flow_ids)) {
+      targetFlowIds = flow_ids.map(d => parseInt(d, 10)).filter(d => !isNaN(d));
+    }
+
+    // Parse pump_ids array (backward compatibility)
     let targetPumpIds = [];
     if (Array.isArray(pump_ids)) {
       targetPumpIds = pump_ids.map(d => parseInt(d, 10)).filter(d => !isNaN(d));
@@ -77,9 +99,9 @@ export async function POST(request) {
       targetPumpIds = [parseInt(pump_id, 10)].filter(d => !isNaN(d));
     }
 
-    if (targetPumpIds.length === 0) {
+    if (targetFlowIds.length === 0 && targetPumpIds.length === 0) {
       return NextResponse.json(
-        { success: false, error: 'At least one valid pump must be selected.' },
+        { success: false, error: 'At least one valid flow or pump must be selected.' },
         { status: 400 }
       );
     }
@@ -104,15 +126,30 @@ export async function POST(request) {
 
     const sql = getDb();
 
-    // Verify all pumps exist
-    const pumpRecords = await sql`
-      SELECT id FROM pump_configs WHERE id = ANY(${targetPumpIds}::int[])
-    `;
-    if (pumpRecords.length !== targetPumpIds.length) {
-      return NextResponse.json(
-        { success: false, error: 'One or more selected pumps do not exist.' },
-        { status: 400 }
-      );
+    // Verify all flows exist (if provided)
+    if (targetFlowIds.length > 0) {
+      const flowRecords = await sql`
+        SELECT id FROM watering_flows WHERE id = ANY(${targetFlowIds}::int[])
+      `;
+      if (flowRecords.length !== targetFlowIds.length) {
+        return NextResponse.json(
+          { success: false, error: 'One or more selected watering flows do not exist.' },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Verify all pumps exist (if provided)
+    if (targetPumpIds.length > 0) {
+      const pumpRecords = await sql`
+        SELECT id FROM pump_configs WHERE id = ANY(${targetPumpIds}::int[])
+      `;
+      if (pumpRecords.length !== targetPumpIds.length) {
+        return NextResponse.json(
+          { success: false, error: 'One or more selected pumps do not exist.' },
+          { status: 400 }
+        );
+      }
     }
 
     if (id) {
@@ -120,19 +157,31 @@ export async function POST(request) {
       await sql`
         UPDATE watering_schedules
         SET 
-          pump_ids = ${targetPumpIds}::int[],
+          pump_ids = ${targetPumpIds.length > 0 ? targetPumpIds : null}::int[],
+          flow_ids = ${targetFlowIds.length > 0 ? targetFlowIds : null}::int[],
           time_of_day = ${time_of_day},
           duration_seconds = ${parsedDuration},
           days_of_week = ${validDays}::int[],
-          enabled = ${isEnabled}
+          enabled = ${isEnabled},
+          cycles = ${parsedCycles},
+          soak_duration_seconds = ${parsedSoak}
         WHERE id = ${parseInt(id, 10)}
       `;
       return NextResponse.json({ success: true, message: 'Watering schedule updated successfully.' });
     } else {
       // Create new schedule
       await sql`
-        INSERT INTO watering_schedules (pump_ids, time_of_day, duration_seconds, days_of_week, enabled)
-        VALUES (${targetPumpIds}::int[], ${time_of_day}, ${parsedDuration}, ${validDays}::int[], ${isEnabled})
+        INSERT INTO watering_schedules (pump_ids, flow_ids, time_of_day, duration_seconds, days_of_week, enabled, cycles, soak_duration_seconds)
+        VALUES (
+          ${targetPumpIds.length > 0 ? targetPumpIds : null}::int[], 
+          ${targetFlowIds.length > 0 ? targetFlowIds : null}::int[], 
+          ${time_of_day}, 
+          ${parsedDuration}, 
+          ${validDays}::int[], 
+          ${isEnabled},
+          ${parsedCycles},
+          ${parsedSoak}
+        )
       `;
       return NextResponse.json({ success: true, message: 'Watering schedule created successfully.' });
     }
@@ -144,6 +193,7 @@ export async function POST(request) {
     );
   }
 }
+
 
 // DELETE: Delete a schedule
 export async function DELETE(request) {

@@ -17,8 +17,8 @@ export async function GET(request) {
   try {
     const sql = getDb();
 
-    // Fetch WiFi settings, interval, sensor configurations, pump configurations, and active schedules
-    const [configs, sensors, pumps, schedules] = await Promise.all([
+    // Fetch WiFi settings, interval, sensor configurations, pump configurations, active schedules, and flows
+    const [configs, sensors, pumps, schedules, flows] = await Promise.all([
       sql`
         SELECT key, value FROM system_config 
         WHERE key IN ('wifi_ssid', 'wifi_password', 'telemetry_interval_minutes', 'pump_safety_timeout_seconds', 'timezone')
@@ -32,8 +32,12 @@ export async function GET(request) {
         ORDER BY id ASC
       `,
       sql`
-        SELECT id, pump_ids, time_of_day, duration_seconds, days_of_week FROM watering_schedules
+        SELECT id, pump_ids, flow_ids, time_of_day, duration_seconds, days_of_week, cycles, soak_duration_seconds FROM watering_schedules
         WHERE enabled = true
+        ORDER BY id ASC
+      `,
+      sql`
+        SELECT id, name, pump_id, sensor_ids FROM watering_flows
         ORDER BY id ASC
       `
     ]);
@@ -75,6 +79,7 @@ export async function GET(request) {
       timezone_offset_seconds: tzOffsetSeconds,
       sensors: sensors,
       pumps: pumps,
+      flows: flows,
       schedules: schedules
     };
 

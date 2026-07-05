@@ -49,15 +49,33 @@ struct PumpConfig {
   bool hasScheduleTimer;            // Flag indicating if a local timer is active
 };
 
+struct WateringFlow {
+  int id;
+  char name[32];
+  int pumpId;
+  int sensorIds[10];
+  int sensorCount;
+};
+
 struct LocalSchedule {
   int id;
   int pumpIds[5];
   int pumpCount;
+  int flowIds[5];
+  int flowCount;
   int hour;
   int minute;
   int durationSeconds;
   int daysOfWeek[7];
   int dayCount;
+  int cycles;
+  int soakDurationSeconds;
+  
+  // Dynamic Cycle & Soak State
+  bool isPulseActive;
+  bool isSoaking;
+  int currentCycle;
+  unsigned long lastPhaseTimestamp;
 };
 
 SensorConfig sensors[10];
@@ -65,6 +83,9 @@ int sensorCount = 0;
 
 PumpConfig pumps[10];
 int pumpCount = 0;
+
+WateringFlow flows[10];
+int flowCount = 0;
 
 LocalSchedule schedules[10];
 int scheduleCount = 0;
@@ -340,6 +361,37 @@ void fetchConfiguration() {
           pumpCount++;
         }
       }
+      
+      // 5b. Map Dynamic Watering Flows
+      if (doc.containsKey("flows")) {
+        JsonArray flowArr = doc["flows"].as<JsonArray>();
+        flowCount = 0;
+        Serial.println("Loading dynamic flows (zones) into local memory...");
+        
+        for (JsonVariant value : flowArr) {
+          if (flowCount >= 10) break;
+          JsonObject flowObj = value.as<JsonObject>();
+          if (flowObj.isNull()) continue;
+          
+          flows[flowCount].id = flowObj["id"].as<int>();
+          const char* fNameStr = flowObj["name"].as<const char*>();
+          strncpy(flows[flowCount].name, fNameStr ? fNameStr : "Unnamed Flow", sizeof(flows[flowCount].name) - 1);
+          flows[flowCount].name[sizeof(flows[flowCount].name) - 1] = '\0';
+          
+          flows[flowCount].pumpId = flowObj["pump_id"].as<int>();
+          
+          JsonArray sensorList = flowObj["sensor_ids"].as<JsonArray>();
+          flows[flowCount].sensorCount = 0;
+          for (JsonVariant sVal : sensorList) {
+            if (flows[flowCount].sensorCount >= 10) break;
+            flows[flowCount].sensorIds[flows[flowCount].sensorCount++] = sVal.as<int>();
+          }
+          
+          Serial.printf("  -> Mapped Flow [%d]: %s (Pump ID: %d, Sensors count: %d)\n",
+                        flows[flowCount].id, flows[flowCount].name, flows[flowCount].pumpId, flows[flowCount].sensorCount);
+          flowCount++;
+        }
+      }
 
       // 6. Map Offline Local Schedules
       if (doc.containsKey("schedules")) {
@@ -365,13 +417,34 @@ void fetchConfiguration() {
           s.hour = hr;
           s.minute = mn;
 
-          // Map targeted pump IDs
-          JsonArray pumpsList = schedObj["pump_ids"].as<JsonArray>();
+          // Map targeted pump IDs (direct/legacy)
           s.pumpCount = 0;
-          for (JsonVariant pVal : pumpsList) {
-            if (s.pumpCount >= 5) break;
-            s.pumpIds[s.pumpCount++] = pVal.as<int>();
+          if (schedObj.containsKey("pump_ids") && !schedObj["pump_ids"].isNull()) {
+            JsonArray pumpsList = schedObj["pump_ids"].as<JsonArray>();
+            for (JsonVariant pVal : pumpsList) {
+              if (s.pumpCount >= 5) break;
+              s.pumpIds[s.pumpCount++] = pVal.as<int>();
+            }
           }
+
+          // Map targeted flow IDs
+          s.flowCount = 0;
+          if (schedObj.containsKey("flow_ids") && !schedObj["flow_ids"].isNull()) {
+            JsonArray flowsList = schedObj["flow_ids"].as<JsonArray>();
+            for (JsonVariant fVal : flowsList) {
+              if (s.flowCount >= 5) break;
+              s.flowIds[s.flowCount++] = fVal.as<int>();
+            }
+          }
+
+          s.cycles = schedObj.containsKey("cycles") ? schedObj["cycles"].as<int>() : 1;
+          s.soakDurationSeconds = schedObj.containsKey("soak_duration_seconds") ? schedObj["soak_duration_seconds"].as<int>() : 0;
+
+          // Initialize runtime state
+          s.isPulseActive = false;
+          s.isSoaking = false;
+          s.currentCycle = 0;
+          s.lastPhaseTimestamp = 0;
 
           // Map weekdays
           JsonArray daysList = schedObj["days_of_week"].as<JsonArray>();
@@ -381,8 +454,8 @@ void fetchConfiguration() {
             s.daysOfWeek[s.dayCount++] = dVal.as<int>();
           }
 
-          Serial.printf("  -> Schedule [%d] loaded: daily at %02d:%02d for %ds (Pumps count: %d)\n",
-                        s.id, s.hour, s.minute, s.durationSeconds, s.pumpCount);
+          Serial.printf("  -> Schedule [%d] loaded: daily at %02d:%02d for %ds (Pumps: %d, Flows: %d, Cycles: %d, Soak: %ds)\n",
+                        s.id, s.hour, s.minute, s.durationSeconds, s.pumpCount, s.flowCount, s.cycles, s.soakDurationSeconds);
           scheduleCount++;
         }
       }
@@ -560,10 +633,94 @@ void reconnect() {
   }
 }
 
+// --- Helper to trigger a schedule watering cycle ---
+void triggerScheduleCycle(LocalSchedule& s) {
+  s.isPulseActive = true;
+  s.isSoaking = false;
+  s.lastPhaseTimestamp = millis();
+  
+  Serial.printf("Executing Schedule [%d] - Starting Cycle %d/%d\n", s.id, s.currentCycle + 1, s.cycles);
+  
+  // 1. Direct pump ids trigger (legacy)
+  for (int pIdx = 0; pIdx < s.pumpCount; pIdx++) {
+    int targetPumpId = s.pumpIds[pIdx];
+    for (int p = 0; p < pumpCount; p++) {
+      if (pumps[p].id == targetPumpId) {
+        digitalWrite(pumps[p].pin, LOW); // ON
+        pumps[p].state = 1;
+        pumps[p].turnedOnAt = millis();
+        pumps[p].scheduledOffAt = millis() + ((unsigned long)s.durationSeconds * 1000);
+        pumps[p].hasScheduleTimer = true;
+        Serial.printf("  -> Pump [%d] (Pin %d) ON for %d seconds\n", targetPumpId, pumps[p].pin, s.durationSeconds);
+      }
+    }
+  }
+  
+  // 2. Flows target trigger (zones)
+  for (int fIdx = 0; fIdx < s.flowCount; fIdx++) {
+    int targetFlowId = s.flowIds[fIdx];
+    for (int f = 0; f < flowCount; f++) {
+      if (flows[f].id == targetFlowId) {
+        int pumpId = flows[f].pumpId;
+        for (int p = 0; p < pumpCount; p++) {
+          if (pumps[p].id == pumpId) {
+            digitalWrite(pumps[p].pin, LOW); // ON
+            pumps[p].state = 1;
+            pumps[p].turnedOnAt = millis();
+            pumps[p].scheduledOffAt = millis() + ((unsigned long)s.durationSeconds * 1000);
+            pumps[p].hasScheduleTimer = true;
+            Serial.printf("  -> Zone Flow [%s] Pump [%d] (Pin %d) ON for %d seconds\n", flows[f].name, pumpId, pumps[p].pin, s.durationSeconds);
+          }
+        }
+      }
+    }
+  }
+  sendTelemetry();
+}
+
 // --- Local Schedules Evaluator ---
 void checkLocalSchedules() {
   if (!timeSynced) return;
 
+  // 1. Run dynamic cycle & soak timers for active schedules
+  for (int i = 0; i < scheduleCount; i++) {
+    LocalSchedule& s = schedules[i];
+    if (s.isPulseActive) {
+      unsigned long elapsed = millis() - s.lastPhaseTimestamp;
+      
+      if (s.isSoaking) {
+        // Check if soak time has expired
+        if (elapsed >= ((unsigned long)s.soakDurationSeconds * 1000)) {
+          s.currentCycle++;
+          if (s.currentCycle < s.cycles) {
+            triggerScheduleCycle(s);
+          } else {
+            s.isPulseActive = false;
+            Serial.printf("Schedule [%d] complete. Finished all %d cycles.\n", s.id, s.cycles);
+          }
+        }
+      } else {
+        // Check if active watering cycle time has expired
+        if (elapsed >= ((unsigned long)s.durationSeconds * 1000)) {
+          if (s.soakDurationSeconds > 0 && (s.currentCycle + 1 < s.cycles)) {
+            s.isSoaking = true;
+            s.lastPhaseTimestamp = millis();
+            Serial.printf("Schedule [%d] Cycle %d complete. Soaking for %d seconds...\n", s.id, s.currentCycle + 1, s.soakDurationSeconds);
+          } else {
+            s.currentCycle++;
+            if (s.currentCycle < s.cycles) {
+              triggerScheduleCycle(s);
+            } else {
+              s.isPulseActive = false;
+              Serial.printf("Schedule [%d] complete. Finished all %d cycles.\n", s.id, s.cycles);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Match current local clock time to trigger new schedules
   struct tm timeinfo;
   if (getLocalTime(&timeinfo)) {
     int currentHour = timeinfo.tm_hour;
@@ -592,25 +749,9 @@ void checkLocalSchedules() {
 
         // Check time of day
         if (dayMatches && s.hour == currentHour && s.minute == currentMinute) {
-          Serial.printf("Local Schedule [%d] matched! Triggering pumps...\n", s.id);
-          
-          for (int pIdx = 0; pIdx < s.pumpCount; pIdx++) {
-            int targetPumpId = s.pumpIds[pIdx];
-
-            for (int p = 0; p < pumpCount; p++) {
-              if (pumps[p].id == targetPumpId) {
-                digitalWrite(pumps[p].pin, LOW); // Turn relay ON (Active-low default configuration)
-                pumps[p].state = 1;
-                pumps[p].turnedOnAt = millis();
-                pumps[p].scheduledOffAt = millis() + ((unsigned long)s.durationSeconds * 1000);
-                pumps[p].hasScheduleTimer = true;
-                
-                Serial.printf("  -> Pump [%d] (Pin %d) turned ON. Local schedule timer set for %d seconds.\n", 
-                              targetPumpId, pumps[p].pin, s.durationSeconds);
-              }
-            }
-          }
-          sendTelemetry();
+          Serial.printf("Local Schedule [%d] matched! Starting Cycle & Soak...\n", s.id);
+          s.currentCycle = 0;
+          triggerScheduleCycle(s);
         }
       }
     }

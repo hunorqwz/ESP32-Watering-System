@@ -17,8 +17,8 @@ export async function GET() {
   try {
     const sql = getDb();
 
-    // Fetch all metadata configs, latest values, commands, and system configs concurrently
-    const [sensors, pumps, latestReadings, commands, configs, rawSchedules, weatherCache] = await Promise.all([
+    // Fetch all metadata configs, latest values, commands, system configs, and flows concurrently
+    const [sensors, pumps, latestReadings, commands, configs, rawSchedules, weatherCache, flows] = await Promise.all([
       // 1. Fetch sensor configurations
       sql`
         SELECT * FROM sensor_configs 
@@ -55,6 +55,11 @@ export async function GET() {
       sql`
         SELECT * FROM weather_forecast_cache
         ORDER BY forecast_date ASC
+      `,
+      // 8. Fetch watering flows
+      sql`
+        SELECT * FROM watering_flows
+        ORDER BY id ASC
       `
     ]);
 
@@ -103,17 +108,44 @@ export async function GET() {
       pumpMap[p.id] = { name: p.name, pin: p.pin };
     });
 
+    const sensorMap = {};
+    sensors.forEach(s => {
+      sensorMap[s.id] = s;
+    });
+
+    const flowMap = {};
+    flows.forEach(f => {
+      flowMap[f.id] = { name: f.name, pump_id: f.pump_id, sensor_ids: f.sensor_ids };
+    });
+
+    const enrichedFlows = flows.map(f => {
+      const targetSensors = (f.sensor_ids || []).map(sid => sensorMap[sid]).filter(Boolean);
+      return {
+        ...f,
+        pump_name: pumpMap[f.pump_id]?.name || `Pump ${f.pump_id}`,
+        pump_pin: pumpMap[f.pump_id]?.pin || 0,
+        sensors: targetSensors,
+        sensor_names: targetSensors.map(s => s.name).join(', ')
+      };
+    });
+
     const schedules = rawSchedules.map(s => {
       const targetPumps = (s.pump_ids || []).map(id => ({
         id,
         name: pumpMap[id]?.name || `Pump ${id}`,
         pin: pumpMap[id]?.pin || 0
       }));
+      const targetFlows = (s.flow_ids || []).map(id => ({
+        id,
+        name: flowMap[id]?.name || `Flow ${id}`
+      }));
       return {
         ...s,
         pumps: targetPumps,
         pump_name: targetPumps.map(p => p.name).join(', '),
         pump_pin: targetPumps.map(p => p.pin).join(', '),
+        flows: targetFlows,
+        flow_name: targetFlows.map(f => f.name).join(', '),
         // Fallback for single pump fields
         pump_id: s.pump_ids && s.pump_ids.length > 0 ? s.pump_ids[0] : null
       };
@@ -279,6 +311,7 @@ export async function GET() {
       success: true,
       sensors: sensors,
       pumps: pumps,
+      flows: enrichedFlows,
       latest_readings: latestReadingsMap,
       history_readings: [],
       commands: commands,

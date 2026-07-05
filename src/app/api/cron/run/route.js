@@ -202,8 +202,28 @@ export async function GET(request) {
 
     // 4. Trigger active schedules ON (or skip them)
     for (const sched of matchingSchedules) {
-      const pumpIds = sched.pump_ids || [];
-      for (const pumpId of pumpIds) {
+      // Resolve targeted pumps from flows or legacy pump_ids
+      let targets = []; // Array of { pumpId, sensorIds }
+      
+      if (sched.flow_ids && sched.flow_ids.length > 0) {
+        const flowRecords = await sql`
+          SELECT id, pump_id, sensor_ids FROM watering_flows
+          WHERE id = ANY(${sched.flow_ids}::int[])
+        `;
+        flowRecords.forEach(fr => {
+          targets.push({ pumpId: fr.pump_id, sensorIds: fr.sensor_ids });
+        });
+      } else {
+        const pumpIds = sched.pump_ids || [];
+        pumpIds.forEach(pid => {
+          targets.push({ pumpId: pid, sensorIds: [] });
+        });
+      }
+
+      for (const target of targets) {
+        const pumpId = target.pumpId;
+        const sensorIds = target.sensorIds;
+
         // Fetch pump config
         const pumpRecords = await sql`
           SELECT name, pin FROM pump_configs WHERE id = ${pumpId}
@@ -221,24 +241,34 @@ export async function GET(request) {
           continue;
         }
 
-        // Evaluate Soil Moisture Skip Rule specifically for this pump
+        // Evaluate Soil Moisture Skip Rule specifically for this flow
         let pumpMoistureSkip = false;
         let pumpMoistureReason = '';
         const moistureThreshold = configMap['moisture_skip_threshold_percent'] ? parseInt(configMap['moisture_skip_threshold_percent'], 10) : 70;
 
         if (moistureThreshold < 100) {
-          const boundSensors = await sql`
-            SELECT id, dry_limit, wet_limit FROM sensor_configs 
-            WHERE type = 'moisture' AND pump_id = ${pumpId}
-          `;
+          let boundSensors = [];
+          
+          if (sensorIds && sensorIds.length > 0) {
+            boundSensors = await sql`
+              SELECT id, dry_limit, wet_limit FROM sensor_configs 
+              WHERE id = ANY(${sensorIds}::int[]) AND type = 'moisture'
+            `;
+          } else {
+            // Legacy fallback: query sensors with this pump_id
+            boundSensors = await sql`
+              SELECT id, dry_limit, wet_limit FROM sensor_configs 
+              WHERE type = 'moisture' AND pump_id = ${pumpId}
+            `;
+          }
           
           if (boundSensors.length > 0) {
-            const sensorIds = boundSensors.map(s => s.id);
+            const querySensorIds = boundSensors.map(s => s.id);
             const latestReadings = await sql`
               SELECT DISTINCT ON (sensor_config_id) 
                 sensor_config_id, value 
               FROM sensor_readings 
-              WHERE sensor_config_id = ANY(${sensorIds})
+              WHERE sensor_config_id = ANY(${querySensorIds})
               ORDER BY sensor_config_id, created_at DESC
             `;
             

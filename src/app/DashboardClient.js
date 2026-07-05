@@ -112,10 +112,19 @@ export default function Dashboard({ apiToken }) {
   // Schedule Form State
   const [editingScheduleId, setEditingScheduleId] = useState(null);
   const [schedPumpIds, setSchedPumpIds] = useState([]);
+  const [schedFlowIds, setSchedFlowIds] = useState([]);
   const [schedTime, setSchedTime] = useState('07:00');
   const [schedDuration, setSchedDuration] = useState(120);
   const [schedDays, setSchedDays] = useState([1, 2, 3, 4, 5, 6, 7]);
   const [schedEnabled, setSchedEnabled] = useState(true);
+  const [schedCycles, setSchedCycles] = useState(1);
+  const [schedSoak, setSchedSoak] = useState(0);
+
+  // Flows / Zones Form State
+  const [editingFlowId, setEditingFlowId] = useState(null);
+  const [flowName, setFlowName] = useState('');
+  const [flowPumpId, setFlowPumpId] = useState('');
+  const [flowSensorIds, setFlowSensorIds] = useState([]);
  
   // Dynamic UI feedback states
   const [toasts, setToasts] = useState([]);
@@ -1038,10 +1047,85 @@ export default function Dashboard({ apiToken }) {
     });
   };
 
+  // Flows Add/Edit/Save/Delete
+  const handleFlowSave = async () => {
+    if (!flowName.trim() || !flowPumpId || flowSensorIds.length === 0) {
+      showToast('Please provide a name, select a pump, and check at least one moisture sensor.', 'error');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/flow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: editingFlowId,
+          name: flowName,
+          pump_id: parseInt(flowPumpId, 10),
+          sensor_ids: flowSensorIds
+        })
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          showToast(editingFlowId ? 'Flow zone updated successfully.' : 'New flow zone created successfully.', 'success');
+          setEditingFlowId(null);
+          setFlowName('');
+          setFlowPumpId('');
+          setFlowSensorIds([]);
+          await fetchDashboardData();
+        } else {
+          showToast(json.error || 'Failed to save flow zone.', 'error');
+        }
+      } else {
+        showToast('Server failed to save flow zone.', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to save flow zone:', err);
+      showToast('Network error saving flow zone.', 'error');
+    }
+  };
+
+  const triggerFlowDelete = async (flowId) => {
+    try {
+      const res = await fetch(`/api/flow?id=${flowId}`, { method: 'DELETE' });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          showToast('Flow zone deleted successfully.', 'success');
+          await fetchDashboardData();
+        } else {
+          showToast(json.error || 'Failed to delete flow zone.', 'error');
+        }
+      } else {
+        showToast('Server failed to delete flow zone.', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to delete flow zone:', err);
+      showToast('Network error deleting flow zone.', 'error');
+    }
+  };
+
+  const handleFlowDelete = (flowId) => {
+    const flow = data.flows?.find(f => f.id === flowId);
+    setConfirmDialog({
+      title: 'Delete Flow Zone?',
+      message: `Are you sure you want to permanently delete the flow zone "${flow?.name || 'this flow'}"? Scheduling rules targeting this flow will remain but need re-mapping.`,
+      confirmLabel: 'Delete Flow',
+      type: 'danger',
+      onConfirm: () => triggerFlowDelete(flowId)
+    });
+  };
+
   // Schedule Add/Edit/Save
   const handleScheduleSave = async () => {
-    if (schedPumpIds.length === 0 || !schedTime || !schedDuration || schedDays.length === 0) {
-      showToast('Please select at least one pump, time, duration, and at least one day.', 'error');
+    if (schedFlowIds.length === 0 && schedPumpIds.length === 0) {
+      showToast('Please select at least one Watering Flow or Pump target.', 'error');
+      return;
+    }
+    if (!schedTime || !schedDuration || schedDays.length === 0) {
+      showToast('Please select a time, duration, and at least one day.', 'error');
       return;
     }
 
@@ -1051,11 +1135,14 @@ export default function Dashboard({ apiToken }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: editingScheduleId,
-          pump_ids: schedPumpIds,
+          pump_ids: schedPumpIds.length > 0 ? schedPumpIds : null,
+          flow_ids: schedFlowIds.length > 0 ? schedFlowIds : null,
           time_of_day: schedTime,
           duration_seconds: parseInt(schedDuration, 10),
           days_of_week: schedDays,
-          enabled: schedEnabled
+          enabled: schedEnabled,
+          cycles: parseInt(schedCycles, 10) || 1,
+          soak_duration_seconds: parseInt(schedSoak, 10) || 0
         })
       });
 
@@ -1065,10 +1152,13 @@ export default function Dashboard({ apiToken }) {
           showToast(editingScheduleId ? 'Schedule updated successfully.' : 'New schedule added successfully.', 'success');
           setEditingScheduleId(null);
           setSchedPumpIds([]);
+          setSchedFlowIds([]);
           setSchedTime('07:00');
           setSchedDuration(120);
           setSchedDays([1, 2, 3, 4, 5, 6, 7]);
           setSchedEnabled(true);
+          setSchedCycles(1);
+          setSchedSoak(0);
           await fetchDashboardData();
         } else {
           showToast(json.error || 'Failed to save schedule.', 'error');
@@ -1534,92 +1624,203 @@ export default function Dashboard({ apiToken }) {
           )}
         </div>
 
-        {/* Middle Tier: Soil Moisture (Dynamic list) */}
-        <div className="space-y-3">
-          <h2 className="text-[10px] text-black uppercase tracking-wider font-bold">Soil Moisture</h2>
-          {moistureSensors.length === 0 ? (
-            <div className="bg-white border border-dashed border-zinc-200 rounded-xl p-8 text-center text-xs text-zinc-500">
-              No moisture sensors defined. Open the Config Manager to add custom sensors.
-            </div>
-          ) : (
-            <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 transition-opacity duration-300 ${isStale ? 'opacity-60' : ''}`}>
-              {moistureSensors.map((sensor) => {
-                const reading = data.latest_readings?.[sensor.id];
-                const rawVal = reading?.value;
-                const hasVal = rawVal !== undefined && rawVal !== null;
-                const percentage = hasVal ? mapMoistureToPercentage(rawVal, sensor.dry_limit, sensor.wet_limit) : 0;
-                const status = getMoistureStatus(percentage);
-                const barColor = getProgressBarColorClass(percentage);
+        {/* Middle Tier: Soil Moisture & Pump Controls grouped by flows OR legacy flat list */}
+        {data.flows && data.flows.length > 0 ? (
+          <div className="space-y-4">
+            <h2 className="text-[10px] text-black uppercase tracking-wider font-bold">Watering Zones (Flows)</h2>
+            <div className="grid grid-cols-1 gap-6 transition-opacity duration-300">
+              {data.flows.map((flow) => {
+                const pump = data.pumps?.find(p => p.id === flow.pump_id);
+                if (!pump) return null;
+                const isActive = pumpsState[pump.id];
+                const isToggling = togglingPumps[pump.id];
+                const disabledByLowWater = isLowWater && !isActive;
+
+                // Find sensors belonging to this flow
+                const flowSensors = data.sensors?.filter(s => flow.sensor_ids?.includes(s.id)) || [];
                 
+                let totalPct = 0;
+                let count = 0;
+                const renderedSensors = flowSensors.map(sensor => {
+                  const reading = data.latest_readings?.[sensor.id];
+                  const rawVal = reading?.value;
+                  const hasVal = rawVal !== undefined && rawVal !== null;
+                  const percentage = hasVal ? mapMoistureToPercentage(rawVal, sensor.dry_limit, sensor.wet_limit) : 0;
+                  if (hasVal) {
+                    totalPct += percentage;
+                    count++;
+                  }
+                  const status = getMoistureStatus(percentage);
+                  const barColor = getProgressBarColorClass(percentage);
+                  return { sensor, percentage, status, barColor, hasVal };
+                });
+
+                const avgMoisture = count > 0 ? Math.round(totalPct / count) : null;
+                const avgStatus = avgMoisture !== null ? getMoistureStatus(avgMoisture) : null;
+
                 return (
-                  <div key={sensor.id} className="bg-white border border-zinc-200 rounded-xl p-4 shadow-sm space-y-3 flex flex-col justify-between">
-                    <div className="flex justify-between items-start">
+                  <div key={flow.id} className={`bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-4 transition ${isActive ? 'bg-emerald-50/20 border-emerald-200' : ''}`}>
+                    <div className="flex justify-between items-center border-b border-zinc-100 pb-3">
                       <div>
-                        <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block leading-tight">{sensor.name}</span>
-                        <span className="text-[8px] text-zinc-400 font-mono">Pin: {sensor.pin}</span>
-                        {loading || !hasVal ? (
-                          <div className="h-6 w-12 bg-zinc-100 rounded animate-pulse mt-1"></div>
-                        ) : (
-                          <div className="flex items-baseline gap-1 mt-1">
-                            <span className="text-lg font-bold text-zinc-800">{percentage}%</span>
-                            <span className={`text-[8px] uppercase tracking-wider ${status.color}`}>{status.label}</span>
+                        <h3 className="text-sm font-bold text-zinc-900 leading-tight">{flow.name}</h3>
+                        <span className="text-[9px] text-zinc-400 font-mono">
+                          Bound Output: {pump.name} (Pin {pump.pin})
+                        </span>
+                      </div>
+                      
+                      <div className="flex items-center gap-3">
+                        {avgMoisture !== null && (
+                          <div className="text-right">
+                            <span className="text-[9px] text-zinc-400 block font-semibold uppercase">Avg Moisture</span>
+                            <span className="text-xs font-bold text-zinc-800">
+                              {avgMoisture}% <span className={`text-[8px] uppercase ${avgStatus.color}`}>{avgStatus.label}</span>
+                            </span>
                           </div>
                         )}
+                        <span className="text-zinc-300">|</span>
+                        <div className="flex items-center gap-2">
+                          <PumpIcon className={`w-4 h-4 ${isActive ? 'text-emerald-500 animate-pulse' : 'text-zinc-400'}`} />
+                          <button
+                            onClick={() => handlePumpToggle(pump.id, pump.pin)}
+                            disabled={isToggling || disabledByLowWater}
+                            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${isActive ? 'bg-emerald-500' : 'bg-zinc-200'} ${(isToggling || disabledByLowWater) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          >
+                            <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${isActive ? 'translate-x-4' : 'translate-x-0'}`} />
+                          </button>
+                        </div>
                       </div>
-                      <Sprout className="w-5 h-5 text-zinc-400" />
                     </div>
-                    <div className="w-full bg-zinc-100 rounded-full h-1 mt-1">
-                      {loading || !hasVal ? (
-                        <div className="h-1 bg-zinc-200 rounded-full w-1/2 animate-pulse"></div>
+
+                    {/* Moisture sensors of this zone */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                      {renderedSensors.length === 0 ? (
+                        <div className="col-span-full text-center py-2 text-[10px] text-zinc-400 italic">
+                          No moisture sensors bound to this flow.
+                        </div>
                       ) : (
-                        <div className={`${barColor} h-1 rounded-full transition-all duration-500`} style={{ width: `${percentage}%` }}></div>
+                        renderedSensors.map(({ sensor, percentage, status, barColor, hasVal }) => (
+                          <div key={sensor.id} className="bg-zinc-50 border border-zinc-100 rounded-lg p-3 space-y-2 flex flex-col justify-between">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block truncate max-w-[100px]" title={sensor.name}>
+                                  {sensor.name}
+                                </span>
+                                {loading || !hasVal ? (
+                                  <div className="h-5 w-10 bg-zinc-200 rounded animate-pulse mt-1"></div>
+                                ) : (
+                                  <div className="flex items-baseline gap-1 mt-0.5">
+                                    <span className="text-sm font-bold text-zinc-800">{percentage}%</span>
+                                    <span className={`text-[7px] uppercase tracking-wider ${status.color}`}>{status.label}</span>
+                                  </div>
+                                )}
+                              </div>
+                              <Sprout className="w-4 h-4 text-zinc-400" />
+                            </div>
+                            <div className="w-full bg-zinc-200 rounded-full h-1 mt-1">
+                              {loading || !hasVal ? (
+                                <div className="h-1 bg-zinc-300 rounded-full w-1/2 animate-pulse"></div>
+                              ) : (
+                                <div className={`${barColor} h-1 rounded-full transition-all duration-500`} style={{ width: `${percentage}%` }}></div>
+                              )}
+                            </div>
+                          </div>
+                        ))
                       )}
                     </div>
                   </div>
                 );
               })}
             </div>
-          )}
-        </div>
-
-        {/* Bottom Tier: Dynamic Pump Controls */}
-        <div className="space-y-3">
-          <h2 className="text-[10px] text-black uppercase tracking-wider font-bold">Pump Controls</h2>
-          {data.pumps.length === 0 ? (
-            <div className="bg-white border border-dashed border-zinc-200 rounded-xl p-6 text-center text-xs text-zinc-500">
-              No pumps configured. Open the settings panel to add dynamic pumps.
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              {data.pumps.map((pump) => {
-                const isActive = pumpsState[pump.id];
-                const isToggling = togglingPumps[pump.id];
-                const disabledByLowWater = isLowWater && !isActive;
-                
-                return (
-                  <div key={pump.id} className={`border rounded-xl p-5 flex justify-between items-center ${isActive ? 'bg-emerald-50/40 border-emerald-200 shadow-sm' : 'bg-white border-zinc-200 shadow-sm'} ${disabledByLowWater ? 'opacity-70 bg-zinc-50' : ''}`}>
-                    <div className="flex items-center gap-3">
-                      <PumpIcon className={`w-5 h-5 ${isActive ? 'text-emerald-500' : 'text-zinc-300'} ${disabledByLowWater ? 'text-zinc-400' : ''}`} />
-                      <div>
-                        <span className="text-sm font-semibold text-zinc-800 block leading-tight">{pump.name}</span>
-                        <span className={`text-[8px] font-mono ${disabledByLowWater ? 'text-red-500 font-bold' : 'text-zinc-400'}`}>
-                          {disabledByLowWater ? 'LOCKED (Low Water)' : `Pin: ${pump.pin}`}
-                        </span>
+          </div>
+        ) : (
+          <>
+            {/* Legacy Flat Lists */}
+            <div className="space-y-3">
+              <h2 className="text-[10px] text-black uppercase tracking-wider font-bold">Soil Moisture</h2>
+              {moistureSensors.length === 0 ? (
+                <div className="bg-white border border-dashed border-zinc-200 rounded-xl p-8 text-center text-xs text-zinc-500">
+                  No moisture sensors defined. Open the Config Manager to add custom sensors.
+                </div>
+              ) : (
+                <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 transition-opacity duration-300 ${isStale ? 'opacity-60' : ''}`}>
+                  {moistureSensors.map((sensor) => {
+                    const reading = data.latest_readings?.[sensor.id];
+                    const rawVal = reading?.value;
+                    const hasVal = rawVal !== undefined && rawVal !== null;
+                    const percentage = hasVal ? mapMoistureToPercentage(rawVal, sensor.dry_limit, sensor.wet_limit) : 0;
+                    const status = getMoistureStatus(percentage);
+                    const barColor = getProgressBarColorClass(percentage);
+                    
+                    return (
+                      <div key={sensor.id} className="bg-white border border-zinc-200 rounded-xl p-4 shadow-sm space-y-3 flex flex-col justify-between">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block leading-tight">{sensor.name}</span>
+                            <span className="text-[8px] text-zinc-400 font-mono">Pin: {sensor.pin}</span>
+                            {loading || !hasVal ? (
+                              <div className="h-6 w-12 bg-zinc-100 rounded animate-pulse mt-1"></div>
+                            ) : (
+                              <div className="flex items-baseline gap-1 mt-1">
+                                <span className="text-lg font-bold text-zinc-800">{percentage}%</span>
+                                <span className={`text-[8px] uppercase tracking-wider ${status.color}`}>{status.label}</span>
+                              </div>
+                            )}
+                          </div>
+                          <Sprout className="w-5 h-5 text-zinc-400" />
+                        </div>
+                        <div className="w-full bg-zinc-100 rounded-full h-1 mt-1">
+                          {loading || !hasVal ? (
+                            <div className="h-1 bg-zinc-200 rounded-full w-1/2 animate-pulse"></div>
+                          ) : (
+                            <div className={`${barColor} h-1 rounded-full transition-all duration-500`} style={{ width: `${percentage}%` }}></div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                    <button
-                      onClick={() => handlePumpToggle(pump.id, pump.pin)}
-                      disabled={isToggling || disabledByLowWater}
-                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${isActive ? 'bg-emerald-500' : 'bg-zinc-200'} ${(isToggling || disabledByLowWater) ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${isActive ? 'translate-x-5' : 'translate-x-0'}`} />
-                    </button>
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+
+            <div className="space-y-3 pt-4">
+              <h2 className="text-[10px] text-black uppercase tracking-wider font-bold">Pump Controls</h2>
+              {data.pumps.length === 0 ? (
+                <div className="bg-white border border-dashed border-zinc-200 rounded-xl p-6 text-center text-xs text-zinc-500">
+                  No pumps configured. Open the settings panel to add dynamic pumps.
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  {data.pumps.map((pump) => {
+                    const isActive = pumpsState[pump.id];
+                    const isToggling = togglingPumps[pump.id];
+                    const disabledByLowWater = isLowWater && !isActive;
+                    
+                    return (
+                      <div key={pump.id} className={`border rounded-xl p-5 flex justify-between items-center ${isActive ? 'bg-emerald-50/40 border-emerald-200 shadow-sm' : 'bg-white border-zinc-200 shadow-sm'} ${disabledByLowWater ? 'opacity-70 bg-zinc-50' : ''}`}>
+                        <div className="flex items-center gap-3">
+                          <PumpIcon className={`w-5 h-5 ${isActive ? 'text-emerald-500' : 'text-zinc-300'} ${disabledByLowWater ? 'text-zinc-400' : ''}`} />
+                          <div>
+                            <span className="text-sm font-semibold text-zinc-800 block leading-tight">{pump.name}</span>
+                            <span className={`text-[8px] font-mono ${disabledByLowWater ? 'text-red-500 font-bold' : 'text-zinc-400'}`}>
+                              {disabledByLowWater ? 'LOCKED (Low Water)' : `Pin: ${pump.pin}`}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handlePumpToggle(pump.id, pump.pin)}
+                          disabled={isToggling || disabledByLowWater}
+                          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${isActive ? 'bg-emerald-500' : 'bg-zinc-200'} ${(isToggling || disabledByLowWater) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                          <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${isActive ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </>
+        )}
 
         {/* Recent Activity Log Section */}
         <ActivityLog commands={data.commands} loading={loading} onClear={handleClearActivityLog} />
@@ -1685,6 +1886,7 @@ export default function Dashboard({ apiToken }) {
                   { id: 'network', label: 'Network Info', icon: Wifi },
                   { id: 'sensors', label: 'Sensors', icon: Sprout },
                   { id: 'pumps', label: 'Pumps', icon: PumpIcon },
+                  { id: 'flows', label: 'Watering Flows', icon: Droplets },
                   { id: 'schedules', label: 'Schedules', icon: Clock },
                   { id: 'general', label: 'General Settings', icon: Cylinder }
                 ].map(tab => (
@@ -2003,6 +2205,139 @@ export default function Dashboard({ apiToken }) {
                           </div>
                         </div>
                       ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 3b. DYNAMIC WATERING FLOWS TAB */}
+                {configTab === 'flows' && (
+                  <div className="space-y-6">
+                    <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wider border-b pb-1.5">Manage Watering Flows</h4>
+
+                    {/* Flow Config Form */}
+                    <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-4 space-y-3 text-xs">
+                      <span className="font-bold text-zinc-700 block text-[11px] uppercase tracking-wider">
+                        {editingFlowId ? 'Edit Flow Configuration' : 'Add Custom Flow (Zone)'}
+                      </span>
+                      
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Flow Name</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Balcony Tomatoes, Living Room Ferns"
+                            value={flowName}
+                            onChange={(e) => setFlowName(e.target.value)}
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-1.5 px-3 focus:outline-none focus:border-zinc-400"
+                          />
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Select Pump</label>
+                            <select
+                              value={flowPumpId}
+                              onChange={(e) => setFlowPumpId(e.target.value)}
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-1.5 px-2.5 focus:outline-none cursor-pointer"
+                            >
+                              <option value="">-- Choose Pump --</option>
+                              {data.pumps.map(p => (
+                                <option key={p.id} value={p.id}>{p.name} (Pin {p.pin})</option>
+                              ))}
+                            </select>
+                          </div>
+                          
+                          <div>
+                            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Pots / Moisture Sensors</label>
+                            <div className="border border-zinc-200 rounded-lg bg-white p-2.5 max-h-36 overflow-y-auto space-y-1.5">
+                              {data.sensors.filter(s => s.type === 'moisture').length === 0 ? (
+                                <span className="text-[10px] text-zinc-400 italic">No moisture sensors configured.</span>
+                              ) : (
+                                data.sensors.filter(s => s.type === 'moisture').map(s => {
+                                  const checked = flowSensorIds.includes(s.id);
+                                  return (
+                                    <label key={s.id} className="flex items-center gap-2 cursor-pointer select-none">
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() => {
+                                          if (checked) {
+                                            setFlowSensorIds(prev => prev.filter(v => v !== s.id));
+                                          } else {
+                                            setFlowSensorIds(prev => [...prev, s.id].sort());
+                                          }
+                                        }}
+                                        className="rounded border-zinc-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                                      />
+                                      <span className="text-[10px] font-semibold text-zinc-700">{s.name} (Pin {s.pin})</span>
+                                    </label>
+                                  );
+                                })
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end gap-2 pt-1">
+                        {editingFlowId && (
+                          <button
+                            onClick={() => {
+                              setEditingFlowId(null);
+                              setFlowName('');
+                              setFlowPumpId('');
+                              setFlowSensorIds([]);
+                            }}
+                            className="bg-white border border-zinc-200 px-3 py-1.5 text-xs font-semibold rounded-lg"
+                          >
+                            Cancel
+                          </button>
+                        )}
+                        <button
+                          onClick={handleFlowSave}
+                          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-1.5 text-xs rounded-lg active:scale-95 transition-all shadow-sm cursor-pointer"
+                        >
+                          {editingFlowId ? 'Update Flow' : 'Add Flow'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Flows List */}
+                    <div className="space-y-2">
+                      <span className="font-bold text-zinc-700 block text-[10px] uppercase tracking-wider">Configured Flows (Zones)</span>
+                      {(!data.flows || data.flows.length === 0) ? (
+                        <div className="text-center py-4 text-xs text-zinc-400 italic">No watering flows configured yet.</div>
+                      ) : (
+                        data.flows.map(flow => (
+                          <div key={flow.id} className="flex justify-between items-center text-xs bg-white border border-zinc-200 p-3 rounded-xl shadow-sm">
+                            <div>
+                              <span className="font-bold text-zinc-800 block">{flow.name}</span>
+                              <span className="text-[10px] text-zinc-400 font-mono">
+                                Output: {flow.pump_name} | Inputs: {flow.sensor_names || 'None'}
+                              </span>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  setEditingFlowId(flow.id);
+                                  setFlowName(flow.name);
+                                  setFlowPumpId(flow.pump_id.toString());
+                                  setFlowSensorIds(flow.sensor_ids || []);
+                                }}
+                                className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-zinc-50 rounded-lg text-zinc-600 transition"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleFlowDelete(flow.id)}
+                                className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-red-50 text-red-500 rounded-lg transition"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      )}
                     </div>
                   </div>
                 )}
@@ -2348,9 +2683,40 @@ export default function Dashboard({ apiToken }) {
                         </div>
                       </div>
 
+                      {/* Multi-flow Selection Toggles */}
+                      {data.flows && data.flows.length > 0 && (
+                        <div className="space-y-1.5">
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase block">Target Watering Flows (Zones)</label>
+                          <div className="flex flex-wrap gap-1.5 mt-0.5">
+                            {data.flows.map(f => {
+                              const isSelected = schedFlowIds.includes(f.id);
+                              return (
+                                <button
+                                  key={f.id}
+                                  type="button"
+                                  onClick={() => {
+                                    if (isSelected) {
+                                      setSchedFlowIds(prev => prev.filter(v => v !== f.id));
+                                    } else {
+                                      setSchedFlowIds(prev => [...prev, f.id].sort());
+                                      setSchedPumpIds([]); // Clear direct pumps to avoid mixing types
+                                    }
+                                  }}
+                                  className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer ${
+                                    isSelected ? 'bg-blue-600 border-blue-600 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50'
+                                  }`}
+                                >
+                                  {f.name}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Multi-pump Selection Toggles */}
                       <div className="space-y-1.5">
-                        <label className="text-[9px] font-semibold text-zinc-500 uppercase block">Target Pumps</label>
+                        <label className="text-[9px] font-semibold text-zinc-500 uppercase block">Target Pumps (Direct Fallback)</label>
                         <div className="flex flex-wrap gap-1.5 mt-0.5">
                           {data.pumps.map(p => {
                             const isSelected = schedPumpIds.includes(p.id);
@@ -2363,6 +2729,7 @@ export default function Dashboard({ apiToken }) {
                                     setSchedPumpIds(prev => prev.filter(v => v !== p.id));
                                   } else {
                                     setSchedPumpIds(prev => [...prev, p.id].sort());
+                                    setSchedFlowIds([]); // Clear flows to avoid mixing types
                                   }
                                 }}
                                 className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer ${
@@ -2376,18 +2743,45 @@ export default function Dashboard({ apiToken }) {
                         </div>
                       </div>
 
+                      {/* Pulse Watering: Cycles & Soak Settings */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Watering Cycles (Repeats)</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="10"
+                            value={schedCycles}
+                            onChange={(e) => setSchedCycles(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-1.5 px-2.5 mt-0.5 focus:outline-none font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-semibold text-zinc-500 uppercase">Soak Duration (Seconds)</label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="3600"
+                            step="10"
+                            value={schedSoak}
+                            onChange={(e) => setSchedSoak(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-1.5 px-2.5 mt-0.5 focus:outline-none font-mono"
+                          />
+                        </div>
+                      </div>
+
                       {/* Days of Week Select Toggles */}
                       <div className="space-y-1.5">
                         <label className="text-[9px] font-semibold text-zinc-500 uppercase block">Active Days</label>
                         <div className="flex flex-wrap gap-1.5 mt-0.5">
                           {[
-                            { val: 1, label: 'M' },
-                            { val: 2, label: 'T' },
-                            { val: 3, label: 'W' },
-                            { val: 4, label: 'T' },
-                            { val: 5, label: 'F' },
-                            { val: 6, label: 'S' },
-                            { val: 7, label: 'S' }
+                            { val: 1, label: 'Mon' },
+                            { val: 2, label: 'Tue' },
+                            { val: 3, label: 'Wed' },
+                            { val: 4, label: 'Thu' },
+                            { val: 5, label: 'Fri' },
+                            { val: 6, label: 'Sat' },
+                            { val: 7, label: 'Sun' }
                           ].map(d => {
                             const isSelected = schedDays.includes(d.val);
                             return (
@@ -2401,7 +2795,7 @@ export default function Dashboard({ apiToken }) {
                                     setSchedDays(prev => [...prev, d.val].sort());
                                   }
                                 }}
-                                className={`w-7 h-7 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer ${
+                                className={`px-2.5 h-8 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer ${
                                   isSelected ? 'bg-blue-600 border-blue-600 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50'
                                 }`}
                               >
@@ -2418,10 +2812,13 @@ export default function Dashboard({ apiToken }) {
                             onClick={() => {
                               setEditingScheduleId(null);
                               setSchedPumpIds([]);
+                              setSchedFlowIds([]);
                               setSchedTime('07:00');
                               setSchedDuration(120);
                               setSchedDays([1, 2, 3, 4, 5, 6, 7]);
                               setSchedEnabled(true);
+                              setSchedCycles(1);
+                              setSchedSoak(0);
                             }}
                             className="bg-white border border-zinc-200 px-3 py-1.5 text-xs font-semibold rounded-lg"
                           >
@@ -2451,10 +2848,10 @@ export default function Dashboard({ apiToken }) {
                             <div key={sched.id} className="flex justify-between items-center text-xs bg-white border border-zinc-200 p-3 rounded-xl shadow-sm">
                               <div>
                                 <span className={`font-bold block ${sched.enabled ? 'text-zinc-800' : 'text-zinc-400 line-through'}`}>
-                                  {sched.pump_name} at {sched.time_of_day.substring(0, 5)}
+                                  {sched.flow_name ? `Zone: ${sched.flow_name}` : sched.pump_name} at {sched.time_of_day.substring(0, 5)}
                                 </span>
                                 <span className="text-[10px] text-zinc-400">
-                                  Days: {activeDaysStr} | Duration: {sched.duration_seconds}s
+                                  Days: {activeDaysStr} | Duration: {sched.duration_seconds}s {sched.cycles > 1 ? `| Cycles: ${sched.cycles} (Soak: ${sched.soak_duration_seconds}s)` : ''}
                                 </span>
                               </div>
                               <div className="flex items-center gap-3">
@@ -2470,11 +2867,14 @@ export default function Dashboard({ apiToken }) {
                                         headers: { 'Content-Type': 'application/json' },
                                         body: JSON.stringify({
                                           id: sched.id,
-                                          pump_ids: sched.pump_ids || (sched.pumps || []).map(p => p.id),
+                                          pump_ids: sched.pump_ids,
+                                          flow_ids: sched.flow_ids,
                                           time_of_day: sched.time_of_day,
                                           duration_seconds: sched.duration_seconds,
                                           days_of_week: sched.days_of_week,
-                                          enabled: nextEnabled
+                                          enabled: nextEnabled,
+                                          cycles: sched.cycles || 1,
+                                          soak_duration_seconds: sched.soak_duration_seconds || 0
                                         })
                                       });
                                       if (res.ok) {
@@ -2496,11 +2896,14 @@ export default function Dashboard({ apiToken }) {
                                   <button
                                     onClick={() => {
                                       setEditingScheduleId(sched.id);
-                                      setSchedPumpIds(sched.pump_ids || (sched.pumps || []).map(p => p.id) || []);
+                                      setSchedPumpIds(sched.pump_ids || []);
+                                      setSchedFlowIds(sched.flow_ids || []);
                                       setSchedTime(sched.time_of_day.substring(0, 5));
                                       setSchedDuration(sched.duration_seconds);
                                       setSchedDays(sched.days_of_week);
                                       setSchedEnabled(sched.enabled);
+                                      setSchedCycles(sched.cycles || 1);
+                                      setSchedSoak(sched.soak_duration_seconds || 0);
                                     }}
                                     className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-zinc-50 rounded-lg text-zinc-600 transition"
                                   >

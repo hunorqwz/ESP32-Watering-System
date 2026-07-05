@@ -70,14 +70,27 @@ CREATE TABLE IF NOT EXISTS system_notes (
 );
 
 
+-- Table for dynamic watering flows (zones mapping pumps to multiple sensors)
+CREATE TABLE IF NOT EXISTS watering_flows (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    pump_id INT NOT NULL REFERENCES pump_configs(id) ON DELETE CASCADE,
+    sensor_ids INT[] NOT NULL,           -- e.g. [1, 2, 3] targeting multiple moisture sensors
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+
 -- Table for dynamic watering schedules
 CREATE TABLE IF NOT EXISTS watering_schedules (
     id SERIAL PRIMARY KEY,
-    pump_ids INT[] NOT NULL,               -- e.g. [1, 2] targeting multiple pumps
+    pump_ids INT[],                        -- Legacy support
+    flow_ids INT[],                        -- e.g. [1, 2] targeting multiple watering flows
     time_of_day TIME NOT NULL,
     duration_seconds INT NOT NULL CHECK (duration_seconds > 0),
     days_of_week INT[] NOT NULL,           -- e.g. [1, 2, 3, 4, 5, 6, 7] where 1 = Monday, 7 = Sunday
     enabled BOOLEAN DEFAULT TRUE,
+    cycles INT DEFAULT 1 CHECK (cycles > 0),
+    soak_duration_seconds INT DEFAULT 0 CHECK (soak_duration_seconds >= 0),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -166,4 +179,5 @@ SELECT setval(pg_get_serial_sequence('sensor_configs', 'id'), COALESCE(max(id), 
 SELECT setval(pg_get_serial_sequence('pump_configs', 'id'), COALESCE(max(id), 1)) FROM pump_configs;
 SELECT setval(pg_get_serial_sequence('system_notes', 'id'), COALESCE(max(id), 1)) FROM system_notes;
 SELECT setval(pg_get_serial_sequence('watering_schedules', 'id'), COALESCE(max(id), 1)) FROM watering_schedules;
+SELECT setval(pg_get_serial_sequence('watering_flows', 'id'), COALESCE(max(id), 1)) FROM watering_flows;
 SELECT setval(pg_get_serial_sequence('users', 'id'), COALESCE(max(id), 1)) FROM users;
