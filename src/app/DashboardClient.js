@@ -1233,14 +1233,6 @@ export default function Dashboard({ apiToken }) {
               <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} strokeWidth={2.2} />
               <span>{refreshing ? 'Refreshing...' : 'Refresh'}</span>
             </button>
-
-            <button
-              onClick={() => signOut({ callbackUrl: '/login' })}
-              className="flex items-center gap-1.5 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 hover:text-red-800 transition px-3 py-1.5 text-xs font-semibold rounded-lg shadow-sm active:scale-95 cursor-pointer"
-            >
-              <LogOut className="w-3.5 h-3.5" strokeWidth={2.2} />
-              <span>Log Out</span>
-            </button>
           </div>
         </header>
 
@@ -1654,6 +1646,14 @@ export default function Dashboard({ apiToken }) {
             >
               <Settings className="w-3.5 h-3.5" />
               <span>Configure Panel</span>
+            </button>
+            <span className="text-zinc-300">|</span>
+            <button
+              onClick={() => signOut({ callbackUrl: '/login' })}
+              className="flex items-center gap-1.5 hover:text-red-500 transition cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-zinc-500 hover:text-red-500 bg-transparent border-0"
+            >
+              <LogOut className="w-3.5 h-3.5 text-zinc-400 hover:text-red-500" strokeWidth={2.2} />
+              <span>Log Out</span>
             </button>
           </div>
         </footer>
