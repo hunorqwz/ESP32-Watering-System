@@ -66,6 +66,9 @@ export default function Dashboard({ apiToken }) {
   const [locationName, setLocationName] = useState('');
   const [locationSearchQuery, setLocationSearchQuery] = useState('');
   const [locationResults, setLocationResults] = useState([]);
+  const [timezone, setTimezone] = useState('Europe/Bucharest');
+  const [moistureSkipThreshold, setMoistureSkipThreshold] = useState(70);
+  const [reservoirMinVolume, setReservoirMinVolume] = useState(5.0);
  
   // Reservoir calibration forms
   const [reservoirUseDimensions, setReservoirUseDimensions] = useState(false);
@@ -134,6 +137,9 @@ export default function Dashboard({ apiToken }) {
             setLatitude(json.configs['latitude'] ? Number(json.configs['latitude']) : 48.137);
             setLongitude(json.configs['longitude'] ? Number(json.configs['longitude']) : 11.575);
             setLocationName(json.configs['location_name'] || '');
+            setTimezone(json.configs['timezone'] || 'Europe/Bucharest');
+            setMoistureSkipThreshold(json.configs['moisture_skip_threshold_percent'] ? parseInt(json.configs['moisture_skip_threshold_percent'], 10) : 70);
+            setReservoirMinVolume(json.configs['reservoir_min_volume_liters'] ? parseFloat(json.configs['reservoir_min_volume_liters']) : 5.0);
 
             // Sync Data Fetch & Sync Interval config inputs
             const intervalMins = json.configs['telemetry_interval_minutes'] ? parseInt(json.configs['telemetry_interval_minutes'], 10) : 15;
@@ -637,6 +643,88 @@ export default function Dashboard({ apiToken }) {
     }
   };
 
+  const handleClearActivityLog = async () => {
+    setConfirmDialog({
+      title: 'Clear System Activity Log?',
+      message: 'Are you sure you want to delete all historical pump activation logs? This action is permanent.',
+      confirmLabel: 'Clear Log',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          const res = await fetch('/api/command', { method: 'DELETE' });
+          if (res.ok) {
+            const json = await res.json();
+            if (json.success) {
+              showToast('System activity log cleared successfully.', 'success');
+              await fetchDashboardData();
+            } else {
+              showToast(json.error || 'Failed to clear activity log.', 'error');
+            }
+          } else {
+            showToast('Server rejected clear request.', 'error');
+          }
+        } catch (err) {
+          console.error('Failed to clear activity log:', err);
+          showToast('Network error clearing activity log.', 'error');
+        }
+      }
+    });
+  };
+
+  const handleTimezoneSave = async () => {
+    setTogglingConfig(true);
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'timezone', value: timezone })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          showToast(`System timezone updated to ${timezone}.`, 'success');
+          await fetchDashboardData();
+        } else {
+          showToast(json.error || 'Failed to update timezone.', 'error');
+        }
+      } else {
+        showToast('Server rejected timezone configuration update.', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to save timezone:', err);
+      showToast('Network error updating timezone.', 'error');
+    } finally {
+      setTogglingConfig(false);
+    }
+  };
+
+  const handleMoistureSkipSave = async () => {
+    setTogglingConfig(true);
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'moisture_skip_threshold_percent', value: String(moistureSkipThreshold) })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          showToast(`Moisture skip threshold updated to ${moistureSkipThreshold === 100 ? 'Disabled' : moistureSkipThreshold + '%'}.`, 'success');
+          await fetchDashboardData();
+        } else {
+          showToast(json.error || 'Failed to update threshold.', 'error');
+        }
+      } else {
+        showToast('Server rejected threshold configuration update.', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to save moisture skip threshold:', err);
+      showToast('Network error updating moisture skip threshold.', 'error');
+    } finally {
+      setTogglingConfig(false);
+    }
+  };
+
   const handleReservoirSave = async () => {
     if (isNaN(reservoirHeight) || reservoirHeight <= 0) {
       showToast('Please enter a valid positive number for tank height.', 'error');
@@ -662,6 +750,10 @@ export default function Dashboard({ apiToken }) {
         return;
       }
     }
+    if (isNaN(reservoirMinVolume) || reservoirMinVolume < 0) {
+      showToast('Please enter a valid positive number for safety minimum volume.', 'error');
+      return;
+    }
     setTogglingConfig(true);
     try {
       const results = await Promise.all([
@@ -669,6 +761,11 @@ export default function Dashboard({ apiToken }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key: 'reservoir_use_dimensions', value: String(reservoirUseDimensions) })
+        }),
+        fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: 'reservoir_min_volume_liters', value: String(reservoirMinVolume) })
         }),
         fetch('/api/config', {
           method: 'POST',
@@ -716,6 +813,8 @@ export default function Dashboard({ apiToken }) {
 
   // Sensor Add/Edit Save
   const handleSensorSave = async (force = false) => {
+    const actualForce = typeof force === 'boolean' ? force : false;
+
     if (!sensorName || !sensorType || sensorPin === undefined) {
       showToast('Please fill in all required sensor configuration fields.', 'error');
       return;
@@ -733,7 +832,7 @@ export default function Dashboard({ apiToken }) {
           pin_secondary: sensorType === 'water_level' && sensorPinSecondary !== '' ? parseInt(sensorPinSecondary, 10) : null,
           dry_limit: sensorType === 'moisture' || sensorType === 'water_level' ? parseInt(sensorDryLimit, 10) : null,
           wet_limit: sensorType === 'moisture' || sensorType === 'water_level' ? parseInt(sensorWetLimit, 10) : null,
-          force: force
+          force: actualForce
         })
       });
       const json = await res.json().catch(() => ({ success: false, error: 'Malformed response from server.' }));
@@ -1028,6 +1127,7 @@ export default function Dashboard({ apiToken }) {
 
   const moistureSensors = data.sensors?.filter(s => s.type === 'moisture') || [];
   const isStale = !connected || !deviceStatus.active;
+  const isLowWater = waterReading !== null && resStats && resStats.liters < reservoirMinVolume;
 
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900 font-sans p-6 md:p-12">
@@ -1062,6 +1162,20 @@ export default function Dashboard({ apiToken }) {
             </button>
           </div>
         </header>
+
+        {isLowWater && (
+          <div className="bg-red-50 border border-red-200 text-red-800 p-4 rounded-xl flex items-center gap-3 shadow-sm animate-in slide-in-from-top-4 duration-300">
+            <svg className="w-5 h-5 text-red-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth="2.2" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+            </svg>
+            <div className="flex-1 min-w-0">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-red-900">Reservoir Safeguard Lockout Active</h4>
+              <p className="text-[10px] text-red-700 mt-0.5 font-medium">
+                The reservoir volume ({resStats.liters}L) is below the minimum safety threshold ({reservoirMinVolume}L). Pumps have been locked out to prevent dry-running. Please refill the reservoir.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Top Tier: Summary metrics (Reservoir Level, Temp, Humidity) */}
         <div className={`grid grid-cols-1 sm:grid-cols-3 gap-4 transition-opacity duration-300 ${isStale ? 'opacity-60' : ''}`}>
@@ -1262,20 +1376,23 @@ export default function Dashboard({ apiToken }) {
               {data.pumps.map((pump) => {
                 const isActive = pumpsState[pump.id];
                 const isToggling = togglingPumps[pump.id];
+                const disabledByLowWater = isLowWater && !isActive;
                 
                 return (
-                  <div key={pump.id} className={`border rounded-xl p-5 flex justify-between items-center ${isActive ? 'bg-emerald-50/40 border-emerald-200 shadow-sm' : 'bg-white border-zinc-200 shadow-sm'}`}>
+                  <div key={pump.id} className={`border rounded-xl p-5 flex justify-between items-center ${isActive ? 'bg-emerald-50/40 border-emerald-200 shadow-sm' : 'bg-white border-zinc-200 shadow-sm'} ${disabledByLowWater ? 'opacity-70 bg-zinc-50' : ''}`}>
                     <div className="flex items-center gap-3">
-                      <PumpIcon className={`w-5 h-5 ${isActive ? 'text-emerald-500' : 'text-zinc-300'}`} />
+                      <PumpIcon className={`w-5 h-5 ${isActive ? 'text-emerald-500' : 'text-zinc-300'} ${disabledByLowWater ? 'text-zinc-400' : ''}`} />
                       <div>
                         <span className="text-sm font-semibold text-zinc-800 block leading-tight">{pump.name}</span>
-                        <span className="text-[8px] text-zinc-400 font-mono">Pin: {pump.pin}</span>
+                        <span className={`text-[8px] font-mono ${disabledByLowWater ? 'text-red-500 font-bold' : 'text-zinc-400'}`}>
+                          {disabledByLowWater ? 'LOCKED (Low Water)' : `Pin: ${pump.pin}`}
+                        </span>
                       </div>
                     </div>
                     <button
                       onClick={() => handlePumpToggle(pump.id, pump.pin)}
-                      disabled={isToggling}
-                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${isActive ? 'bg-emerald-500' : 'bg-zinc-200'} ${isToggling ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      disabled={isToggling || disabledByLowWater}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${isActive ? 'bg-emerald-500' : 'bg-zinc-200'} ${(isToggling || disabledByLowWater) ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${isActive ? 'translate-x-5' : 'translate-x-0'}`} />
                     </button>
@@ -1287,7 +1404,7 @@ export default function Dashboard({ apiToken }) {
         </div>
 
         {/* Recent Activity Log Section */}
-        <ActivityLog commands={data.commands} loading={loading} />
+        <ActivityLog commands={data.commands} loading={loading} onClear={handleClearActivityLog} />
 
         {/* Footer Settings */}
         <footer className="flex justify-between items-center text-[10px] text-zinc-400 pt-6 border-t border-zinc-200">
@@ -1676,6 +1793,67 @@ export default function Dashboard({ apiToken }) {
                     </div>
 
                     <div className="space-y-4 pt-4 border-t border-zinc-100 text-xs">
+                      <h5 className="font-bold text-zinc-700 text-xs uppercase tracking-wider">System Timezone (Scheduling)</h5>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">Select timezone</label>
+                        <div className="flex gap-2">
+                          <select
+                            value={timezone}
+                            onChange={(e) => setTimezone(e.target.value)}
+                            className="flex-1 bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-zinc-400 font-semibold cursor-pointer"
+                          >
+                            <option value="Europe/Bucharest">Europe/Bucharest (GMT+3)</option>
+                            <option value="Europe/London">Europe/London (GMT+1)</option>
+                            <option value="Europe/Paris">Europe/Paris (GMT+2)</option>
+                            <option value="Europe/Athens">Europe/Athens (GMT+3)</option>
+                            <option value="Europe/Budapest">Europe/Budapest (GMT+2)</option>
+                            <option value="UTC">UTC (GMT+0)</option>
+                          </select>
+                          <button
+                            onClick={handleTimezoneSave}
+                            disabled={togglingConfig}
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-1.5 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
+                          >
+                            Save Timezone
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 pt-4 border-t border-zinc-100 text-xs">
+                      <h5 className="font-bold text-zinc-700 text-xs uppercase tracking-wider">Soil Moisture Skip (Automation)</h5>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">Moisture Skip Threshold</label>
+                          <span className="text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">
+                            {moistureSkipThreshold === 100 ? 'Disabled' : `${moistureSkipThreshold}%`}
+                          </span>
+                        </div>
+                        <div className="flex gap-4 items-center">
+                          <input
+                            type="range"
+                            min="10"
+                            max="100"
+                            step="5"
+                            value={moistureSkipThreshold}
+                            onChange={(e) => setMoistureSkipThreshold(parseInt(e.target.value, 10))}
+                            className="flex-1 accent-blue-600 cursor-pointer"
+                          />
+                          <button
+                            onClick={handleMoistureSkipSave}
+                            disabled={togglingConfig}
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-1.5 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
+                          >
+                            Save Threshold
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-zinc-400">
+                          If average active soil moisture exceeds this threshold, scheduled watering cycles will be skipped automatically to save water.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 pt-4 border-t border-zinc-100 text-xs">
                       <h5 className="font-bold text-zinc-700 text-xs uppercase tracking-wider">System Location (Weather Forecast)</h5>
                       {locationName && (
                         <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 p-2.5 rounded-lg flex items-center justify-between">
@@ -1826,6 +2004,22 @@ export default function Dashboard({ apiToken }) {
                           />
                         </div>
                       )}
+
+                      {/* Safety Minimum Limit */}
+                      <div className="pt-2 border-t border-zinc-100">
+                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Minimum Safety Volume (Liters)</label>
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0.5"
+                          value={reservoirMinVolume}
+                          onChange={(e) => setReservoirMinVolume(parseFloat(e.target.value))}
+                          className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                        />
+                        <p className="text-[9px] text-zinc-400 mt-1">
+                          Pumps will lock and scheduled/manual triggers will block if volume falls below this level to prevent dry-running.
+                        </p>
+                      </div>
 
                       <button
                         onClick={handleReservoirSave}

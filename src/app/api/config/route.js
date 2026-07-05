@@ -26,7 +26,10 @@ export async function POST(request) {
       'reservoir_sensor_offset_cm',
       'latitude',
       'longitude',
-      'location_name'
+      'location_name',
+      'timezone',
+      'moisture_skip_threshold_percent',
+      'reservoir_min_volume_liters'
     ];
     if (!allowedKeys.includes(key)) {
       return NextResponse.json(

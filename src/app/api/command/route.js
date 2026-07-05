@@ -127,6 +127,25 @@ export async function POST(request) {
           startVolumeLiters = await getReservoirVolume(sql, parseFloat(latestReading[0].value));
         }
       }
+
+      // Safeguard: Check if reservoir level is below minimum safety limit
+      if (startVolumeLiters !== null) {
+        const minVolConfig = await sql`
+          SELECT value FROM system_config WHERE key = 'reservoir_min_volume_liters'
+        `;
+        const minVol = minVolConfig.length > 0 ? parseFloat(minVolConfig[0].value) : 5.0;
+        if (startVolumeLiters < minVol) {
+          // Log failed action and block
+          await sql`
+            INSERT INTO command_logs (pump, pump_name, pump_pin, state, status, error_details, start_volume_liters)
+            VALUES (${parsedPump}, ${pumpName}, ${pumpPin}, 1, 'failed', 'Locked: Reservoir is empty. Command blocked.', ${startVolumeLiters})
+          `;
+          return NextResponse.json(
+            { success: false, error: `Locked: Reservoir volume (${startVolumeLiters}L) is below safety limit (${minVol}L).` },
+            { status: 400 }
+          );
+        }
+      }
     } catch (err) {
       console.error('Failed to pre-calculate start reservoir volume:', err.message);
     }
@@ -229,6 +248,20 @@ export async function POST(request) {
 
     return NextResponse.json(
       { success: false, error: 'Failed to communicate with EMQX broker or log history.', details: error.message },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE() {
+  try {
+    const sql = getDb();
+    await sql`DELETE FROM command_logs`;
+    return NextResponse.json({ success: true, message: 'System activity log cleared successfully.' });
+  } catch (error) {
+    console.error('Failed to clear command logs:', error);
+    return NextResponse.json(
+      { success: false, error: 'Failed to clear activity log from database.', details: error.message },
       { status: 500 }
     );
   }

@@ -106,7 +106,10 @@ BEGIN
             ('reservoir_width_cm', '60'),
             ('reservoir_length_cm', '70'),
             ('reservoir_height_cm', '50'),
-            ('reservoir_sensor_offset_cm', '100');
+            ('reservoir_sensor_offset_cm', '100'),
+            ('timezone', 'Europe/Bucharest'),
+            ('moisture_skip_threshold_percent', '70'),
+            ('reservoir_min_volume_liters', '5.0');
     END IF;
 
     -- 2. Seed default sensors if empty

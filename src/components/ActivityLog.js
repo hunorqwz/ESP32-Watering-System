@@ -2,7 +2,7 @@
 
 import { Activity, CheckCircle2, XCircle, Clock } from 'lucide-react';
 
-export default function ActivityLog({ commands = [], loading = false }) {
+export default function ActivityLog({ commands = [], loading = false, onClear }) {
   const formatTime = (timestamp) => {
     if (!timestamp) return '';
     const date = new Date(timestamp);
@@ -32,7 +32,17 @@ export default function ActivityLog({ commands = [], loading = false }) {
           <Activity className="w-4 h-4 text-zinc-500" />
           <h3 className="text-sm font-semibold text-zinc-800">Recent System Activity</h3>
         </div>
-        <span className="text-[10px] text-zinc-400 font-medium">Last 10 Actions</span>
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-zinc-400 font-medium">Last 10 Actions</span>
+          {onClear && commands.length > 0 && (
+            <button
+              onClick={onClear}
+              className="text-[10px] font-bold text-zinc-400 hover:text-red-500 hover:bg-red-50/50 border border-zinc-100 hover:border-red-100 transition px-2 py-0.5 rounded-md cursor-pointer shadow-sm active:scale-95"
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
 
       {loading ? (
