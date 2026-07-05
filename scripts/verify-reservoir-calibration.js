@@ -49,7 +49,10 @@ async function runTest() {
   console.log('Sending config update: reservoir_height_cm = 60...');
   const res1 = await fetch(`${baseUrl}/api/config`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+    },
     body: JSON.stringify({ key: 'reservoir_height_cm', value: '60' })
   });
   const body1 = await res1.json();
@@ -59,7 +62,10 @@ async function runTest() {
   console.log('Sending config update: reservoir_sensor_offset_cm = 120...');
   const res2 = await fetch(`${baseUrl}/api/config`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+    },
     body: JSON.stringify({ key: 'reservoir_sensor_offset_cm', value: '120' })
   });
   const body2 = await res2.json();
@@ -112,12 +118,18 @@ async function runTest() {
   try {
     await fetch(`${baseUrl}/api/config`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({ key: 'reservoir_height_cm', value: origHeight })
     });
     await fetch(`${baseUrl}/api/config`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({ key: 'reservoir_sensor_offset_cm', value: origOffset })
     });
     console.log('Original reservoir configurations successfully restored.');

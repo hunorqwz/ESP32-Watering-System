@@ -24,6 +24,10 @@ async function main() {
   let originalThreshold = null;
 
   try {
+    // Temporarily bind sensor 1 to Pump 1
+    console.log('[Setup] Binding sensor 1 to Pump 1...');
+    await client.query("UPDATE sensor_configs SET pump_id = 1 WHERE id = 1");
+
     // 1. Get current moisture threshold to restore later
     const thRes = await client.query("SELECT value FROM system_config WHERE key = 'moisture_skip_threshold_percent'");
     originalThreshold = thRes.rows[0]?.value || '70';
@@ -99,6 +103,9 @@ async function main() {
     process.exitCode = 1;
   } finally {
     console.log('\n[Cleanup] Cleaning up database test records...');
+    // Unbind sensor 1 from Pump 1
+    await client.query("UPDATE sensor_configs SET pump_id = NULL WHERE id = 1");
+
     if (createdScheduleId) {
       await client.query('DELETE FROM watering_schedules WHERE id = $1', [createdScheduleId]);
     }

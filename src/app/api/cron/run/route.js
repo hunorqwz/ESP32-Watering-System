@@ -122,61 +122,7 @@ export async function GET(request) {
       }
     }
 
-    // 2b. Evaluate Soil Moisture Skip Rules
-    let avgMoisture = null;
-    let skipReasonMoisture = '';
-    let willSkipMoisture = false;
-    
-    const moistureThreshold = configMap['moisture_skip_threshold_percent'] ? parseInt(configMap['moisture_skip_threshold_percent'], 10) : 70;
-    
-    if (moistureThreshold < 100) {
-      const moistureSensors = await sql`
-        SELECT id, dry_limit, wet_limit FROM sensor_configs WHERE type = 'moisture'
-      `;
-      if (moistureSensors.length > 0) {
-        const sensorIds = moistureSensors.map(s => s.id);
-        const latestReadings = await sql`
-          SELECT DISTINCT ON (sensor_config_id) 
-            sensor_config_id, value 
-          FROM sensor_readings 
-          WHERE sensor_config_id = ANY(${sensorIds})
-          ORDER BY sensor_config_id, created_at DESC
-        `;
-        
-        const readingsMap = {};
-        latestReadings.forEach(r => {
-          readingsMap[r.sensor_config_id] = parseFloat(r.value);
-        });
-        
-        let totalMoisture = 0;
-        let count = 0;
-        moistureSensors.forEach(s => {
-          const raw = readingsMap[s.id];
-          if (raw !== undefined) {
-            const dry = s.dry_limit !== null && s.dry_limit !== undefined ? s.dry_limit : 3400;
-            const wet = s.wet_limit !== null && s.wet_limit !== undefined ? s.wet_limit : 1100;
-            if (dry !== wet) {
-              let pct = 0;
-              if (dry > wet) {
-                pct = raw >= dry ? 0 : raw <= wet ? 100 : Math.round(((dry - raw) / (dry - wet)) * 100);
-              } else {
-                pct = raw <= dry ? 0 : raw >= wet ? 100 : Math.round(((raw - dry) / (wet - dry)) * 100);
-              }
-              totalMoisture += pct;
-              count++;
-            }
-          }
-        });
-        
-        if (count > 0) {
-          avgMoisture = Math.round(totalMoisture / count);
-          if (avgMoisture > moistureThreshold) {
-            willSkipMoisture = true;
-            skipReasonMoisture = `Soil moisture is high (${avgMoisture}%, threshold: ${moistureThreshold}%).`;
-          }
-        }
-      }
-    }
+    // 2b. Evaluate Soil Moisture Skip Rules (removed global check - now evaluated per pump zone)
 
     // 3. Fetch all active schedules
     const schedules = await sql`
@@ -227,13 +173,69 @@ export async function GET(request) {
           continue;
         }
 
-        if (willSkipMoisture) {
+        // Evaluate Soil Moisture Skip Rule specifically for this pump
+        let pumpMoistureSkip = false;
+        let pumpMoistureReason = '';
+        const moistureThreshold = configMap['moisture_skip_threshold_percent'] ? parseInt(configMap['moisture_skip_threshold_percent'], 10) : 70;
+
+        if (moistureThreshold < 100) {
+          const boundSensors = await sql`
+            SELECT id, dry_limit, wet_limit FROM sensor_configs 
+            WHERE type = 'moisture' AND pump_id = ${pumpId}
+          `;
+          
+          if (boundSensors.length > 0) {
+            const sensorIds = boundSensors.map(s => s.id);
+            const latestReadings = await sql`
+              SELECT DISTINCT ON (sensor_config_id) 
+                sensor_config_id, value 
+              FROM sensor_readings 
+              WHERE sensor_config_id = ANY(${sensorIds})
+              ORDER BY sensor_config_id, created_at DESC
+            `;
+            
+            const readingsMap = {};
+            latestReadings.forEach(r => {
+              readingsMap[r.sensor_config_id] = parseFloat(r.value);
+            });
+            
+            let totalMoisture = 0;
+            let count = 0;
+            boundSensors.forEach(s => {
+              const raw = readingsMap[s.id];
+              if (raw !== undefined) {
+                const dry = s.dry_limit !== null && s.dry_limit !== undefined ? s.dry_limit : 3400;
+                const wet = s.wet_limit !== null && s.wet_limit !== undefined ? s.wet_limit : 1100;
+                if (dry !== wet) {
+                  let pct = 0;
+                  if (dry > wet) {
+                    pct = raw >= dry ? 0 : raw <= wet ? 100 : Math.round(((dry - raw) / (dry - wet)) * 100);
+                  } else {
+                    pct = raw <= dry ? 0 : raw >= wet ? 100 : Math.round(((raw - dry) / (wet - dry)) * 100);
+                  }
+                  totalMoisture += pct;
+                  count++;
+                }
+              }
+            });
+            
+            if (count > 0) {
+              const avgMoisture = Math.round(totalMoisture / count);
+              if (avgMoisture > moistureThreshold) {
+                pumpMoistureSkip = true;
+                pumpMoistureReason = `Soil moisture is high (${avgMoisture}%, threshold: ${moistureThreshold}%).`;
+              }
+            }
+          }
+        }
+
+        if (pumpMoistureSkip) {
           // Moisture skip logged
           await sql`
             INSERT INTO command_logs (pump, pump_name, pump_pin, state, status, error_details, start_volume_liters)
-            VALUES (${pumpId}, ${pump.name}, ${pump.pin}, 1, 'skipped', ${`Moisture skip active: ${skipReasonMoisture}`}, ${currentVolume})
+            VALUES (${pumpId}, ${pump.name}, ${pump.pin}, 1, 'skipped', ${`Moisture skip active: ${pumpMoistureReason}`}, ${currentVolume})
           `;
-          triggersRun.push({ pumpId, pumpName: pump.name, status: 'skipped', reason: skipReasonMoisture });
+          triggersRun.push({ pumpId, pumpName: pump.name, status: 'skipped', reason: pumpMoistureReason });
           continue;
         }
 

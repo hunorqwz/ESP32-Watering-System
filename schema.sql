@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS sensor_configs (
     sensor_group VARCHAR(100) NOT NULL,
     dry_limit INT DEFAULT 3400,           -- Analog limit for dry soil/empty tank
     wet_limit INT DEFAULT 1100,           -- Analog limit for wet soil/full tank
+    pump_id INT REFERENCES pump_configs(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -90,6 +91,15 @@ CREATE TABLE IF NOT EXISTS weather_forecast_cache (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Table for user authentication
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    email VARCHAR(100) UNIQUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 
 -- CONDITIONAL DATA SEEDING (Executes only if tables are completely empty)
 DO $$
@@ -109,7 +119,8 @@ BEGIN
             ('reservoir_sensor_offset_cm', '100'),
             ('timezone', 'Europe/Bucharest'),
             ('moisture_skip_threshold_percent', '70'),
-            ('reservoir_min_volume_liters', '5.0');
+            ('reservoir_min_volume_liters', '5.0'),
+            ('pump_safety_timeout_seconds', '300');
     END IF;
 
     -- 2. Seed default sensors if empty
@@ -141,6 +152,12 @@ BEGIN
         INSERT INTO system_notes (title, content)
         VALUES ('Welcome Note', 'This is your gardening notebook. Use this space to write down reminders, watering schedules, or system observations!');
     END IF;
+
+    -- 5. Seed default user if empty
+    IF NOT EXISTS (SELECT 1 FROM users) THEN
+        INSERT INTO users (username, password_hash, email)
+        VALUES ('admin', '$2b$10$jPScj94sqEX1NoXwYPtUCuQ8oAJSoBW9.U3Ninid.Lco/EeLZzzlW', 'admin@example.com');
+    END IF;
 END $$;
 
 
@@ -149,3 +166,4 @@ SELECT setval(pg_get_serial_sequence('sensor_configs', 'id'), COALESCE(max(id), 
 SELECT setval(pg_get_serial_sequence('pump_configs', 'id'), COALESCE(max(id), 1)) FROM pump_configs;
 SELECT setval(pg_get_serial_sequence('system_notes', 'id'), COALESCE(max(id), 1)) FROM system_notes;
 SELECT setval(pg_get_serial_sequence('watering_schedules', 'id'), COALESCE(max(id), 1)) FROM watering_schedules;
+SELECT setval(pg_get_serial_sequence('users', 'id'), COALESCE(max(id), 1)) FROM users;

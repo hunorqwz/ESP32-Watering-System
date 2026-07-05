@@ -33,7 +33,10 @@ async function runTests() {
   try {
     const res = await fetch(`${baseUrl}/api/sensor`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({
         name: 'Conflict Test Sensor',
         type: 'moisture',
@@ -60,7 +63,10 @@ async function runTests() {
   try {
     const res = await fetch(`${baseUrl}/api/pump`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({
         name: 'Conflict Test Pump',
         pin: 32
@@ -85,7 +91,10 @@ async function runTests() {
   try {
     const res = await fetch(`${baseUrl}/api/sensor`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({
         name: 'Ambient Humidity Test',
         type: 'humidity',
@@ -96,7 +105,7 @@ async function runTests() {
     const body = await res.json();
     console.log('Status Code:', res.status);
     console.log('Response:', body);
-    if (res.status === 200 && body.needsForce && body.warning && body.warning.includes('shared with sensor "Ambient Temp"')) {
+    if (res.status === 200 && body.needsForce && body.warning && body.warning.includes('Ambient Temp')) {
       console.log('Result: SUCCESS (Returned soft warning correctly)');
     } else {
       console.error('Result: FAILURE (Expected 200 OK with needsForce and soft warning payload)');
@@ -107,7 +116,10 @@ async function runTests() {
     console.log('\n[Test 3b] Re-sending with force: true to save...');
     const forceRes = await fetch(`${baseUrl}/api/sensor`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({
         name: 'Ambient Humidity Test',
         type: 'humidity',
@@ -140,7 +152,10 @@ async function runTests() {
     const configBody = await sensorsRes.json();
     const createdSensor = configBody.sensors.find(s => s.name === 'Ambient Humidity Test');
     if (createdSensor) {
-      const deleteRes = await fetch(`${baseUrl}/api/sensor?id=${createdSensor.id}`, { method: 'DELETE' });
+      const deleteRes = await fetch(`${baseUrl}/api/sensor?id=${createdSensor.id}`, { 
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}` }
+      });
       const deleteBody = await deleteRes.json();
       console.log('Delete cleanup status:', deleteRes.status, deleteBody.success ? 'Success' : 'Failed');
     }

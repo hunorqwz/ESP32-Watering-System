@@ -17,11 +17,11 @@ export async function GET(request) {
   try {
     const sql = getDb();
 
-    // Fetch WiFi settings, interval, sensor configurations, and pump configurations
-    const [configs, sensors, pumps] = await Promise.all([
+    // Fetch WiFi settings, interval, sensor configurations, pump configurations, and active schedules
+    const [configs, sensors, pumps, schedules] = await Promise.all([
       sql`
         SELECT key, value FROM system_config 
-        WHERE key IN ('wifi_ssid', 'wifi_password', 'telemetry_interval_minutes')
+        WHERE key IN ('wifi_ssid', 'wifi_password', 'telemetry_interval_minutes', 'pump_safety_timeout_seconds', 'timezone')
       `,
       sql`
         SELECT id, name, type, pin, pin_secondary, dry_limit, wet_limit FROM sensor_configs 
@@ -29,6 +29,11 @@ export async function GET(request) {
       `,
       sql`
         SELECT id, name, pin, state FROM pump_configs 
+        ORDER BY id ASC
+      `,
+      sql`
+        SELECT id, pump_ids, time_of_day, duration_seconds, days_of_week FROM watering_schedules
+        WHERE enabled = true
         ORDER BY id ASC
       `
     ]);
@@ -38,6 +43,19 @@ export async function GET(request) {
     configs.forEach(cfg => {
       configMap[cfg.key] = cfg.value;
     });
+
+    // Compute dynamic timezone offset in seconds to pass to ESP32 configTime NTP hook
+    const tz = configMap['timezone'] || 'Europe/Bucharest';
+    let tzOffsetSeconds = 7200; // default to GMT+2 (e.g. Europe/Bucharest winter time)
+    try {
+      const now = new Date();
+      const dateStr = now.toLocaleString('en-US', { timeZone: tz });
+      const tzDate = new Date(dateStr);
+      const utcDate = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
+      tzOffsetSeconds = Math.round((tzDate.getTime() - utcDate.getTime()) / 1000);
+    } catch (tzErr) {
+      console.warn('Failed to calculate timezone offset:', tzErr.message);
+    }
 
     if (configMap['wifi_password']) {
       const { decrypt } = await import('@/lib/crypto');
@@ -51,8 +69,13 @@ export async function GET(request) {
       telemetry_interval_minutes: configMap['telemetry_interval_minutes'] 
         ? parseInt(configMap['telemetry_interval_minutes'], 10) 
         : 15,
+      pump_safety_timeout_seconds: configMap['pump_safety_timeout_seconds']
+        ? parseInt(configMap['pump_safety_timeout_seconds'], 10)
+        : 300,
+      timezone_offset_seconds: tzOffsetSeconds,
       sensors: sensors,
-      pumps: pumps
+      pumps: pumps,
+      schedules: schedules
     };
 
     return NextResponse.json(responsePayload, { status: 200 });

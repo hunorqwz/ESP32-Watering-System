@@ -2,9 +2,11 @@
  
 import { useState, useEffect, useRef } from 'react';
 import mqtt from 'mqtt';
-import { Cylinder, Thermometer, Droplets, Sprout, RefreshCw, Settings, X, Plus, Trash2, Edit2, Wifi, Clock, CloudSun, Calendar } from 'lucide-react';
+import { Cylinder, Thermometer, Droplets, Sprout, RefreshCw, Settings, X, Plus, Trash2, Edit2, Wifi, Clock, CloudSun, Calendar, LogOut } from 'lucide-react';
 import ActivityLog from '@/components/ActivityLog';
 import NotesModal from '@/components/NotesModal';
+import { signOut } from 'next-auth/react';
+import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, BarChart, Bar } from 'recharts';
 
 const PumpIcon = ({ className }) => (
   <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth="2.2" stroke="currentColor">
@@ -85,6 +87,7 @@ export default function Dashboard({ apiToken }) {
   const [sensorPinSecondary, setSensorPinSecondary] = useState('');
   const [sensorDryLimit, setSensorDryLimit] = useState(3400);
   const [sensorWetLimit, setSensorWetLimit] = useState(1100);
+  const [sensorPumpId, setSensorPumpId] = useState('');
  
   // Pump Form
   const [editingPumpId, setEditingPumpId] = useState(null);
@@ -92,6 +95,19 @@ export default function Dashboard({ apiToken }) {
   const [pumpPin, setPumpPin] = useState(25);
   const [pumpFlowRate, setPumpFlowRate] = useState(4.0);
   const [reservoirSensorOffset, setReservoirSensorOffset] = useState(100);
+
+  // History / Chart States
+  const [historyData, setHistoryData] = useState({
+    moistureHistory: [],
+    waterHistory: [],
+    analytics: { totalSkipped: 0, rainSkips: 0, moistureSkips: 0, safeguardSkips: 0 }
+  });
+
+  // Watchdog Settings
+  const [pumpSafetyTimeout, setPumpSafetyTimeout] = useState(300);
+  const [historyRange, setHistoryRange] = useState('7d');
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [chartTab, setChartTab] = useState('moisture');
 
   // Schedule Form State
   const [editingScheduleId, setEditingScheduleId] = useState(null);
@@ -112,6 +128,29 @@ export default function Dashboard({ apiToken }) {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 4000);
   };
+
+  const fetchHistoryData = async (range = '7d') => {
+    try {
+      setHistoryLoading(true);
+      const res = await fetch(`/api/dashboard/history?range=${range}`);
+      const json = await res.json();
+      if (json.success) {
+        setHistoryData({
+          moistureHistory: json.moistureHistory || [],
+          waterHistory: json.waterHistory || [],
+          analytics: json.analytics || { totalSkipped: 0, rainSkips: 0, moistureSkips: 0, safeguardSkips: 0 }
+        });
+      }
+    } catch (err) {
+      console.error('Failed to fetch history:', err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchHistoryData(historyRange);
+  }, [historyRange]);
 
   const fetchDashboardData = async () => {
     try {
@@ -140,6 +179,7 @@ export default function Dashboard({ apiToken }) {
             setTimezone(json.configs['timezone'] || 'Europe/Bucharest');
             setMoistureSkipThreshold(json.configs['moisture_skip_threshold_percent'] ? parseInt(json.configs['moisture_skip_threshold_percent'], 10) : 70);
             setReservoirMinVolume(json.configs['reservoir_min_volume_liters'] ? parseFloat(json.configs['reservoir_min_volume_liters']) : 5.0);
+            setPumpSafetyTimeout(json.configs['pump_safety_timeout_seconds'] ? parseInt(json.configs['pump_safety_timeout_seconds'], 10) : 300);
 
             // Sync Data Fetch & Sync Interval config inputs
             const intervalMins = json.configs['telemetry_interval_minutes'] ? parseInt(json.configs['telemetry_interval_minutes'], 10) : 15;
@@ -725,6 +765,37 @@ export default function Dashboard({ apiToken }) {
     }
   };
 
+  const handlePumpSafetyTimeoutSave = async () => {
+    if (isNaN(pumpSafetyTimeout) || pumpSafetyTimeout <= 0) {
+      showToast('Pump safety timeout must be a positive integer.', 'error');
+      return;
+    }
+    setTogglingConfig(true);
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'pump_safety_timeout_seconds', value: String(pumpSafetyTimeout) })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          showToast(`Pump safety timeout updated to ${pumpSafetyTimeout} seconds.`, 'success');
+          await fetchDashboardData();
+        } else {
+          showToast(json.error || 'Failed to update safety timeout.', 'error');
+        }
+      } else {
+        showToast('Server rejected safety timeout configuration update.', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to save pump safety timeout:', err);
+      showToast('Network error updating pump safety timeout.', 'error');
+    } finally {
+      setTogglingConfig(false);
+    }
+  };
+
   const handleReservoirSave = async () => {
     if (isNaN(reservoirHeight) || reservoirHeight <= 0) {
       showToast('Please enter a valid positive number for tank height.', 'error');
@@ -832,6 +903,7 @@ export default function Dashboard({ apiToken }) {
           pin_secondary: sensorType === 'water_level' && sensorPinSecondary !== '' ? parseInt(sensorPinSecondary, 10) : null,
           dry_limit: sensorType === 'moisture' || sensorType === 'water_level' ? parseInt(sensorDryLimit, 10) : null,
           wet_limit: sensorType === 'moisture' || sensorType === 'water_level' ? parseInt(sensorWetLimit, 10) : null,
+          pump_id: sensorPumpId !== '' ? parseInt(sensorPumpId, 10) : null,
           force: actualForce
         })
       });
@@ -844,6 +916,7 @@ export default function Dashboard({ apiToken }) {
           setSensorName('');
           setSensorPin(32);
           setSensorPinSecondary('');
+          setSensorPumpId('');
           await fetchDashboardData();
         } else if (json.needsForce) {
           setConfirmDialog({
@@ -1160,6 +1233,14 @@ export default function Dashboard({ apiToken }) {
               <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} strokeWidth={2.2} />
               <span>{refreshing ? 'Refreshing...' : 'Refresh'}</span>
             </button>
+
+            <button
+              onClick={() => signOut({ callbackUrl: '/login' })}
+              className="flex items-center gap-1.5 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 hover:text-red-800 transition px-3 py-1.5 text-xs font-semibold rounded-lg shadow-sm active:scale-95 cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" strokeWidth={2.2} />
+              <span>Log Out</span>
+            </button>
           </div>
         </header>
 
@@ -1313,7 +1394,152 @@ export default function Dashboard({ apiToken }) {
               </div>
             )}
           </div>
+ 
+        </div>
 
+        {/* Charts & Historical Analytics */}
+        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b border-zinc-100 pb-3">
+            <div>
+              <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold block">Historical Telemetry & Water Usage</span>
+              <h2 className="text-sm font-bold text-zinc-900 mt-0.5">System Analytics</h2>
+            </div>
+            
+            <div className="flex items-center gap-2 text-xs">
+              {/* Range Selector */}
+              <div className="flex bg-zinc-100 p-0.5 rounded-lg border border-zinc-200">
+                {['24h', '7d', '30d'].map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => {
+                      setHistoryRange(r);
+                    }}
+                    className={`px-2.5 py-1 text-[10px] font-bold uppercase rounded-md transition ${
+                      historyRange === r
+                        ? 'bg-white text-zinc-800 shadow-sm'
+                        : 'text-zinc-500 hover:text-zinc-800'
+                    }`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+
+              {/* Chart Type Toggle */}
+              <div className="flex bg-zinc-100 p-0.5 rounded-lg border border-zinc-200">
+                {['moisture', 'water'].map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => setChartTab(type)}
+                    className={`px-2.5 py-1 text-[10px] font-bold uppercase rounded-md transition ${
+                      chartTab === type
+                        ? 'bg-white text-zinc-800 shadow-sm'
+                        : 'text-zinc-500 hover:text-zinc-800'
+                    }`}
+                  >
+                    {type === 'moisture' ? 'Moisture' : 'Water Usage'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {historyLoading ? (
+            <div className="h-64 flex flex-col items-center justify-center text-xs text-zinc-400 space-y-2">
+              <RefreshCw className="w-5 h-5 animate-spin" />
+              <span>Loading historical telemetry...</span>
+            </div>
+          ) : chartTab === 'moisture' ? (
+            <div className="h-64 w-full text-xs">
+              {historyData.moistureHistory.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-zinc-400 italic">
+                  No historical moisture readings found in this range.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={historyData.moistureHistory} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" />
+                    <XAxis dataKey="time" stroke="#71717a" fontSize={9} tickLine={false} />
+                    <YAxis domain={[0, 100]} stroke="#71717a" fontSize={9} tickLine={false} label={{ value: 'Moisture %', angle: -90, position: 'insideLeft', offset: 10, fill: '#71717a', fontSize: 9 }} />
+                    <Tooltip contentStyle={{ background: '#ffffff', border: '1px solid #e4e4e7', borderRadius: '8px', fontSize: '10px', color: '#09090b' }} />
+                    <Legend iconSize={8} iconType="circle" wrapperStyle={{ fontSize: '10px', marginTop: '10px' }} />
+                    {Object.keys(historyData.moistureHistory[0] || {})
+                      .filter((key) => key !== 'time')
+                      .map((sensorName, idx) => {
+                        const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+                        const strokeColor = colors[idx % colors.length];
+                        return (
+                          <Line
+                            key={sensorName}
+                            type="monotone"
+                            dataKey={sensorName}
+                            stroke={strokeColor}
+                            strokeWidth={2}
+                            dot={false}
+                            activeDot={{ r: 4 }}
+                          />
+                        );
+                      })}
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          ) : (
+            <div className="h-64 w-full text-xs">
+              {historyData.waterHistory.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-zinc-400 italic">
+                  No irrigation consumption data recorded in this range.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={historyData.waterHistory} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" />
+                    <XAxis dataKey="date" stroke="#71717a" fontSize={9} tickLine={false} />
+                    <YAxis stroke="#71717a" fontSize={9} tickLine={false} label={{ value: 'Liters (L)', angle: -90, position: 'insideLeft', offset: 10, fill: '#71717a', fontSize: 9 }} />
+                    <Tooltip contentStyle={{ background: '#ffffff', border: '1px solid #e4e4e7', borderRadius: '8px', fontSize: '10px', color: '#09090b' }} />
+                    <Legend iconSize={8} iconType="circle" wrapperStyle={{ fontSize: '10px', marginTop: '10px' }} />
+                    {Object.keys(historyData.waterHistory[0] || {})
+                      .filter((key) => key !== 'date')
+                      .map((pumpName, idx) => {
+                        const colors = ['#60a5fa', '#34d399', '#fbbf24', '#f87171', '#a78bfa', '#f472b6'];
+                        const fillCol = colors[idx % colors.length];
+                        return (
+                          <Bar
+                            key={pumpName}
+                            dataKey={pumpName}
+                            fill={fillCol}
+                            radius={[4, 4, 0, 0]}
+                            stackId="a"
+                          />
+                        );
+                      })}
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          )}
+
+          {/* Quick Metrics Analytics Footer */}
+          {!historyLoading && (
+            <div className="grid grid-cols-4 gap-2 pt-3 border-t border-zinc-100 text-center text-xs">
+              <div className="bg-zinc-50 rounded-lg p-2 border border-zinc-100">
+                <span className="text-[9px] text-zinc-400 uppercase tracking-wider block">Total Skips</span>
+                <span className="text-sm font-bold text-zinc-800">{historyData.analytics.totalSkipped}</span>
+              </div>
+              <div className="bg-zinc-50 rounded-lg p-2 border border-zinc-100">
+                <span className="text-[9px] text-zinc-400 uppercase tracking-wider block">Rain Skips</span>
+                <span className="text-sm font-bold text-zinc-800">{historyData.analytics.rainSkips}</span>
+              </div>
+              <div className="bg-zinc-50 rounded-lg p-2 border border-zinc-100">
+                <span className="text-[9px] text-zinc-400 uppercase tracking-wider block">Moisture Skips</span>
+                <span className="text-sm font-bold text-zinc-800">{historyData.analytics.moistureSkips}</span>
+              </div>
+              <div className="bg-zinc-50 rounded-lg p-2 border border-zinc-100">
+                <span className="text-[9px] text-zinc-400 uppercase tracking-wider block">Safeguards</span>
+                <span className="text-sm font-bold text-zinc-800">{historyData.analytics.safeguardSkips}</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Middle Tier: Soil Moisture (Dynamic list) */}
@@ -1548,6 +1774,23 @@ export default function Dashboard({ apiToken }) {
                         </div>
                       </div>
 
+                      {/* Associated Pump Zone */}
+                      <div>
+                        <label className="text-[9px] font-semibold text-zinc-500 uppercase">Associated Pump / Zone</label>
+                        <select
+                          value={sensorPumpId}
+                          onChange={(e) => setSensorPumpId(e.target.value)}
+                          className="w-full bg-white border border-zinc-200 rounded-lg py-1 px-2.5 mt-0.5 focus:outline-none"
+                        >
+                          <option value="">None (Global / Unbound)</option>
+                          {data.pumps.map(pump => (
+                            <option key={pump.id} value={pump.id}>
+                              {pump.name} (Pin {pump.pin})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="text-[9px] font-semibold text-zinc-500 uppercase">
@@ -1604,6 +1847,7 @@ export default function Dashboard({ apiToken }) {
                               setSensorName('');
                               setSensorPin(32);
                               setSensorPinSecondary('');
+                              setSensorPumpId('');
                             }}
                             className="bg-white border border-zinc-200 px-3 py-1.5 text-xs font-semibold rounded-lg"
                           >
@@ -1628,6 +1872,10 @@ export default function Dashboard({ apiToken }) {
                             <span className="font-bold text-zinc-800 block">{sensor.name}</span>
                             <span className="text-[10px] text-zinc-400 font-mono">
                               Type: {sensor.type} | Pin: {sensor.pin}{(sensor.pin_secondary !== null && sensor.pin_secondary !== undefined) ? ` (Echo: ${sensor.pin_secondary})` : ''} | Group: {sensor.sensor_group}
+                              {(() => {
+                                const bound = data.pumps.find(p => p.id === sensor.pump_id);
+                                return bound ? ` | Waters: ${bound.name}` : ' | Waters: None (Global)';
+                              })()}
                             </span>
                           </div>
                           <div className="flex gap-2">
@@ -1640,6 +1888,7 @@ export default function Dashboard({ apiToken }) {
                                 setSensorPinSecondary(sensor.pin_secondary !== null && sensor.pin_secondary !== undefined ? sensor.pin_secondary : '');
                                 setSensorDryLimit(sensor.dry_limit !== null && sensor.dry_limit !== undefined ? sensor.dry_limit : 3400);
                                 setSensorWetLimit(sensor.wet_limit !== null && sensor.wet_limit !== undefined ? sensor.wet_limit : 1100);
+                                setSensorPumpId(sensor.pump_id !== null && sensor.pump_id !== undefined ? String(sensor.pump_id) : '');
                               }}
                               className="p-1.5 border border-zinc-100 hover:border-zinc-200 hover:bg-zinc-50 rounded-lg text-zinc-600 transition"
                             >
@@ -1849,6 +2098,39 @@ export default function Dashboard({ apiToken }) {
                         </div>
                         <p className="text-[10px] text-zinc-400">
                           If average active soil moisture exceeds this threshold, scheduled watering cycles will be skipped automatically to save water.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 pt-4 border-t border-zinc-100 text-xs">
+                      <h5 className="font-bold text-zinc-700 text-xs uppercase tracking-wider">Pump Safety Watchdog (Safety)</h5>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">Max Run Watchdog Timeout</label>
+                          <span className="text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">
+                            {pumpSafetyTimeout} seconds
+                          </span>
+                        </div>
+                        <div className="flex gap-4 items-center">
+                          <input
+                            type="number"
+                            min="10"
+                            max="3600"
+                            step="10"
+                            value={pumpSafetyTimeout}
+                            onChange={(e) => setPumpSafetyTimeout(parseInt(e.target.value, 10) || 300)}
+                            className="flex-1 bg-white border border-zinc-200 rounded-lg py-1.5 px-3 focus:outline-none font-mono"
+                          />
+                          <button
+                            onClick={handlePumpSafetyTimeoutSave}
+                            disabled={togglingConfig}
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-1.5 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
+                          >
+                            Save Timeout
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-zinc-400">
+                          Hardware safety timeout: The ESP32 will automatically turn off any pump relay if it runs continuously for more than this duration (protects against missed MQTT signals or offline state).
                         </p>
                       </div>
                     </div>

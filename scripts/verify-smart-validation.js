@@ -37,7 +37,10 @@ async function runTest() {
   console.log('\nTest 1: Trying to add a new Moisture sensor on Pin 32 (already taken by Zone 1)...');
   const res1 = await fetch(`${baseUrl}/api/sensor`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+    },
     body: JSON.stringify({
       name: 'Conflict Moisture',
       type: 'moisture',
@@ -60,7 +63,10 @@ async function runTest() {
   console.log('\nTest 2: Adding a new Humidity sensor on Pin 4 (taken by Temp, should prompt for confirmation)...');
   const res2 = await fetch(`${baseUrl}/api/sensor`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+    },
     body: JSON.stringify({
       name: 'Shared Humidity',
       type: 'humidity',
@@ -83,7 +89,10 @@ async function runTest() {
   console.log('\nTest 3: Re-sending with force: true...');
   const res3 = await fetch(`${baseUrl}/api/sensor`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+    },
     body: JSON.stringify({
       name: 'Shared Humidity',
       type: 'humidity',

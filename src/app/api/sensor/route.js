@@ -50,7 +50,7 @@ async function triggerReload() {
 export async function POST(request) {
   try {
     const payload = await request.json();
-    const { id, name, type, pin, pin_secondary, dry_limit, wet_limit, force } = payload || {};
+    const { id, name, type, pin, pin_secondary, dry_limit, wet_limit, pump_id, force } = payload || {};
 
     if (!name || !type || pin === undefined) {
       return NextResponse.json(
@@ -104,6 +104,7 @@ export async function POST(request) {
     let conflictDetails = '';
 
     if (sensorConflicts.length > 0) {
+      const conflictingSensorNames = [];
       for (const conflict of sensorConflicts) {
         // Digital shareable types (like temp & humidity sharing a DHT22 pin or I2C bus)
         const isShareableType = (type === 'temperature' || type === 'humidity') && 
@@ -114,8 +115,12 @@ export async function POST(request) {
           break;
         } else {
           hasSoftConflict = true;
-          conflictDetails = `GPIO Warning: Pin is shared with sensor "${conflict.name}". Ensure this is a shared bus (e.g. I2C) or a combined sensor (e.g. DHT22).`;
+          conflictingSensorNames.push(conflict.name);
         }
+      }
+      if (hasSoftConflict && !hasHardConflict) {
+        const joinedNames = conflictingSensorNames.map(n => `"${n}"`).join(' and ');
+        conflictDetails = `GPIO Warning: Pin is shared with sensor ${joinedNames}. Ensure this is a shared bus (e.g. I2C) or a combined sensor (e.g. DHT22).`;
       }
     }
 
@@ -149,12 +154,15 @@ export async function POST(request) {
     const wetVal = wet_limit !== undefined && wet_limit !== null && String(wet_limit).trim() !== '' ? parseInt(wet_limit, 10) : null;
     const dry = isNaN(dryVal) ? null : dryVal;
     const wet = isNaN(wetVal) ? null : wetVal;
+    
+    const parsedPumpId = pump_id !== undefined && pump_id !== null && String(pump_id).trim() !== '' ? parseInt(pump_id, 10) : null;
+    const pumpIdVal = isNaN(parsedPumpId) ? null : parsedPumpId;
 
     if (id) {
       // Update existing sensor config
       await sql`
         UPDATE sensor_configs 
-        SET name = ${name}, type = ${type}, pin = ${parsedPin}, pin_secondary = ${pinSecondary}, sensor_group = ${calculatedGroup}, dry_limit = ${dry}, wet_limit = ${wet}
+        SET name = ${name}, type = ${type}, pin = ${parsedPin}, pin_secondary = ${pinSecondary}, sensor_group = ${calculatedGroup}, dry_limit = ${dry}, wet_limit = ${wet}, pump_id = ${pumpIdVal}
         WHERE id = ${parseInt(id, 10)}
       `;
       await triggerReload();
@@ -162,8 +170,8 @@ export async function POST(request) {
     } else {
       // Insert new sensor config
       await sql`
-        INSERT INTO sensor_configs (name, type, pin, pin_secondary, sensor_group, dry_limit, wet_limit)
-        VALUES (${name}, ${type}, ${parsedPin}, ${pinSecondary}, ${calculatedGroup}, ${dry}, ${wet})
+        INSERT INTO sensor_configs (name, type, pin, pin_secondary, sensor_group, dry_limit, wet_limit, pump_id)
+        VALUES (${name}, ${type}, ${parsedPin}, ${pinSecondary}, ${calculatedGroup}, ${dry}, ${wet}, ${pumpIdVal})
       `;
       await triggerReload();
       return NextResponse.json({ success: true, message: 'Sensor added successfully.' });

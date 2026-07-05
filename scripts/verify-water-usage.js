@@ -63,7 +63,10 @@ async function main() {
     console.log('\n[Step 2] Triggering Pump 1 ON...');
     const onRes = await fetch(`${baseUrl}/api/command`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({ pump: 1, state: 1 })
     });
     const onBody = await onRes.json();
@@ -84,7 +87,10 @@ async function main() {
     console.log('\n[Step 3] Triggering Pump 1 OFF...');
     const offRes = await fetch(`${baseUrl}/api/command`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({ pump: 1, state: 0 })
     });
     const offBody = await offRes.json();

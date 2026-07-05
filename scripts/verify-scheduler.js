@@ -42,12 +42,26 @@ async function runTests() {
   const jsDay = testDate.getDay();
   const testDayOfWeek = jsDay === 0 ? 7 : jsDay;
 
+  let activeScheduleIds = [];
+
   try {
+    // Disable any pre-existing active schedules to avoid interfering with prediction assertions
+    const activeSchedulesRes = await client.query(
+      "SELECT id FROM watering_schedules WHERE enabled = true"
+    );
+    activeScheduleIds = activeSchedulesRes.rows.map(r => r.id);
+    if (activeScheduleIds.length > 0) {
+      console.log(`Temporarily disabling active schedules: ${activeScheduleIds.join(', ')}...`);
+      await client.query("UPDATE watering_schedules SET enabled = false");
+    }
     // 1. Create a dynamic test schedule for tomorrow at 08:00 AM
     console.log('\n[Test 1] Creating a test schedule for tomorrow at 08:00...');
     const resCreate = await fetch(`${baseUrl}/api/schedule`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({
         pump_ids: [1],
         time_of_day: '08:00',
@@ -93,7 +107,9 @@ async function runTests() {
 
     // Query dashboard and check prediction
     console.log('Querying dashboard dataset for Next Run prediction (expected to run)...');
-    const resDash1 = await fetch(`${baseUrl}/api/dashboard`);
+    const resDash1 = await fetch(`${baseUrl}/api/dashboard`, {
+      headers: { 'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}` }
+    });
     const dashBody1 = await resDash1.json();
     const nextWatering1 = dashBody1.next_watering;
     
@@ -129,7 +145,9 @@ async function runTests() {
 
     // Query dashboard and check prediction for rain skip
     console.log('Querying dashboard dataset for Next Run prediction (expected rain skip)...');
-    const resDash2 = await fetch(`${baseUrl}/api/dashboard`);
+    const resDash2 = await fetch(`${baseUrl}/api/dashboard`, {
+      headers: { 'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}` }
+    });
     const dashBody2 = await resDash2.json();
     const nextWatering2 = dashBody2.next_watering;
 
@@ -151,6 +169,12 @@ async function runTests() {
       await client.query('DELETE FROM watering_schedules WHERE id = $1', [createdScheduleId]);
     }
     
+    // Restore pre-existing schedules
+    if (activeScheduleIds.length > 0) {
+      console.log(`Restoring active schedules: ${activeScheduleIds.join(', ')}...`);
+      await client.query("UPDATE watering_schedules SET enabled = true WHERE id = ANY($1)", [activeScheduleIds]);
+    }
+
     console.log(`Clearing injected weather cache entry for: ${testDateStr}...`);
     await client.query('DELETE FROM weather_forecast_cache WHERE forecast_date = $1::date', [testDateStr]);
     
