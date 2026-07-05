@@ -68,6 +68,54 @@ export async function GET(request) {
   const sweepsRun = [];
 
   try {
+    // 0. Daily Maintenance: Fetch fresh weather forecast and prune logs older than 30 days
+    try {
+      const latConfig = await sql`SELECT value FROM system_config WHERE key = 'latitude'`;
+      const lngConfig = await sql`SELECT value FROM system_config WHERE key = 'longitude'`;
+      const lat = latConfig.length > 0 ? latConfig[0].value : '48.137';
+      const lng = lngConfig.length > 0 ? lngConfig[0].value : '11.575';
+
+      const { fetchLiveForecast, getMockForecast } = await import('@/lib/weather');
+      let forecastData = [];
+      try {
+        forecastData = await fetchLiveForecast(lat, lng);
+      } catch (apiErr) {
+        console.error('Failed to fetch from Open-Meteo API during cron run:', apiErr.message);
+      }
+
+      if (forecastData.length === 0) {
+        forecastData = getMockForecast();
+      }
+
+      // Cache the forecast data
+      for (const day of forecastData) {
+        await sql`
+          INSERT INTO weather_forecast_cache (forecast_date, precipitation_probability, expected_precipitation_mm, raw_payload, updated_at)
+          VALUES (
+            ${day.forecast_date}::date, 
+            ${day.precipitation_probability}, 
+            ${day.expected_precipitation_mm}, 
+            ${JSON.stringify({ temp_c: day.temp_c, description: day.description })}::jsonb,
+            CURRENT_TIMESTAMP
+          )
+          ON CONFLICT (forecast_date) DO UPDATE
+          SET 
+            precipitation_probability = EXCLUDED.precipitation_probability,
+            expected_precipitation_mm = EXCLUDED.expected_precipitation_mm,
+            raw_payload = EXCLUDED.raw_payload,
+            updated_at = CURRENT_TIMESTAMP
+        `;
+      }
+
+      // Prune old readings and command logs (older than 30 days)
+      await sql`DELETE FROM sensor_readings WHERE created_at < NOW() - INTERVAL '30 days'`;
+      await sql`DELETE FROM command_logs WHERE created_at < NOW() - INTERVAL '30 days'`;
+      
+      console.log('Daily cron maintenance (weather refresh & database pruning) completed successfully.');
+    } catch (maintErr) {
+      console.error('Failed to execute daily cron maintenance tasks:', maintErr.message);
+    }
+
     // 1. Load system configurations
     const rawConfigs = await sql`SELECT key, value FROM system_config`;
     const configMap = {};
