@@ -1,6 +1,52 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 
+let cachedAuthHeader = null;
+let cachedPublishUrl = null;
+
+function getEmqxConfig(apiUrl, apiKey, apiSecret) {
+  if (!cachedAuthHeader) {
+    cachedAuthHeader = 'Basic ' + Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
+  }
+  if (!cachedPublishUrl) {
+    let cleanUrl = apiUrl.replace(/\/$/, '');
+    if (cleanUrl.endsWith('/api/v5')) {
+      cleanUrl = cleanUrl.slice(0, -7);
+    }
+    cachedPublishUrl = cleanUrl + '/api/v5/publish';
+  }
+  return { authHeader: cachedAuthHeader, publishUrl: cachedPublishUrl };
+}
+
+async function triggerReload() {
+  const apiUrl = process.env.EMQX_API_URL;
+  const apiKey = process.env.EMQX_API_KEY;
+  const apiSecret = process.env.EMQX_API_SECRET;
+
+  if (apiUrl && apiKey && apiSecret) {
+    try {
+      const { authHeader, publishUrl } = getEmqxConfig(apiUrl, apiKey, apiSecret);
+      await fetch(publishUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': authHeader,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          topic: 'device/commands',
+          qos: 1,
+          payload: JSON.stringify({ action: 'reload_config' }),
+          payload_encoding: 'plain'
+        }),
+        signal: AbortSignal.timeout(4000)
+      });
+      console.log('Successfully published reload_config command via MQTT.');
+    } catch (err) {
+      console.error('Failed to publish reload_config command:', err.message);
+    }
+  }
+}
+
 export async function POST(request) {
   try {
     const payload = await request.json();
@@ -93,6 +139,11 @@ export async function POST(request) {
       } catch (syncErr) {
         console.error('Failed to sync water_level sensor dry/wet limits:', syncErr);
       }
+    }
+
+    // Trigger immediate ESP32 config reload via MQTT for WiFi credential changes
+    if (key === 'wifi_ssid' || key === 'wifi_password') {
+      await triggerReload();
     }
 
     return NextResponse.json({
