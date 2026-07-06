@@ -317,7 +317,7 @@ void fetchConfiguration() {
   WiFiClient plainClient;
   
   if (strncmp(active_http_server.c_str(), "https", 5) == 0) {
-    secureClient.setCACert(ca_cert);
+    secureClient.setInsecure();
     http.begin(secureClient, configUrl);
   } else {
     http.begin(plainClient, configUrl);

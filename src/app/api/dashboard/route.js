@@ -7,10 +7,36 @@ function toLocalDateString(date) {
   if (!(date instanceof Date)) {
     return String(date).split('T')[0];
   }
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function getTimezoneOffsetMs(date, timeZone) {
+  try {
+    const tzString = date.toLocaleString('en-US', { timeZone });
+    const utcString = date.toLocaleString('en-US', { timeZone: 'UTC' });
+    return new Date(tzString).getTime() - new Date(utcString).getTime();
+  } catch (err) {
+    return 7200000; // Fallback to +2 hours
+  }
+}
+
+function getLocalDateInTz(date, timeZone) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(date);
+    const map = {};
+    parts.forEach(p => { map[p.type] = p.value; });
+    return `${map.year}-${map.month}-${map.day}`;
+  } catch (err) {
+    return toLocalDateString(date);
+  }
 }
 
 export async function GET() {
@@ -201,26 +227,37 @@ export async function GET() {
       let nextSchedule = null;
       
       const now = new Date();
+      const tz = configMap['timezone'] || 'Europe/Bucharest';
+      
+      // Calculate current offset for now
+      const currentOffsetMs = getTimezoneOffsetMs(now, tz);
+      
+      // Shift current UTC time into the local frame
+      const localNow = new Date(now.getTime() + currentOffsetMs);
       
       // Look forward up to 7 days
       for (let dayOffset = 0; dayOffset < 8; dayOffset++) {
-        const checkDate = new Date(now);
-        checkDate.setDate(now.getDate() + dayOffset);
+        const localCheckDate = new Date(localNow.getTime() + dayOffset * 24 * 60 * 60 * 1000);
         
         // JS day of week (0 = Sunday, 1 = Monday ... 6 = Saturday)
-        const jsDay = checkDate.getDay();
+        const jsDay = localCheckDate.getUTCDay();
         const ourDay = jsDay === 0 ? 7 : jsDay;
         
         for (const sched of enabledSchedules) {
           if (!sched.days_of_week.includes(ourDay)) continue;
           
           const [hours, minutes, seconds] = sched.time_of_day.split(':').map(Number);
-          const schedTime = new Date(checkDate);
-          schedTime.setHours(hours, minutes, seconds || 0, 0);
+          const candidateLocalTime = new Date(localCheckDate);
+          candidateLocalTime.setUTCHours(hours, minutes, seconds || 0, 0);
           
-          if (schedTime.getTime() > now.getTime()) {
-            if (!absoluteNextTime || schedTime.getTime() < absoluteNextTime.getTime()) {
-              absoluteNextTime = schedTime;
+          if (candidateLocalTime.getTime() > localNow.getTime()) {
+            // Recompute target UTC offset at target local time to handle DST boundaries
+            const tempUtcTime = new Date(candidateLocalTime.getTime() - currentOffsetMs);
+            const candidateOffsetMs = getTimezoneOffsetMs(tempUtcTime, tz);
+            const actualUtcTime = new Date(candidateLocalTime.getTime() - candidateOffsetMs);
+            
+            if (!absoluteNextTime || actualUtcTime.getTime() < absoluteNextTime.getTime()) {
+              absoluteNextTime = actualUtcTime;
               nextSchedule = sched;
             }
           }
@@ -230,11 +267,11 @@ export async function GET() {
       }
       
       if (absoluteNextTime && nextSchedule) {
-        const nextDateStr = toLocalDateString(absoluteNextTime);
+        const nextDateStr = getLocalDateInTz(absoluteNextTime, tz);
         
         // Search if we have weather cache for this target date
         const forecastDay = activeWeatherCache.find(w => {
-          const wDateStr = toLocalDateString(w.forecast_date);
+          const wDateStr = getLocalDateInTz(w.forecast_date, tz);
           return wDateStr === nextDateStr;
         });
         
@@ -257,7 +294,7 @@ export async function GET() {
         let isMoistureSkip = false;
         let moistureReason = '';
         const moistureThreshold = configMap['moisture_skip_threshold_percent'] ? parseInt(configMap['moisture_skip_threshold_percent'], 10) : 70;
-
+ 
         const moistureSensors = sensors.filter(s => s.type === 'moisture');
         if (moistureSensors.length > 0) {
           let totalMoisture = 0;
@@ -290,8 +327,8 @@ export async function GET() {
           }
         }
         
-        const dateOptions = { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false };
-        const timeLabel = absoluteNextTime.toLocaleDateString(undefined, dateOptions);
+        const dateOptions = { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz };
+        const timeLabel = absoluteNextTime.toLocaleDateString('en-US', dateOptions).replace(',', '');
         
         const isSkipped = willRain || isMoistureSkip;
         const skipReason = willRain 
@@ -299,7 +336,7 @@ export async function GET() {
           : isMoistureSkip 
             ? `Skip active: ${moistureReason}`
             : `Scheduled cycle. ${moistureSummary}`;
-
+ 
         nextWatering = {
           time: timeLabel,
           timestamp: absoluteNextTime.getTime(),

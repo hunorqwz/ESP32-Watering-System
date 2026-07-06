@@ -141,10 +141,8 @@ export async function POST(request) {
       }
     }
 
-    // Trigger immediate ESP32 config reload via MQTT for WiFi credential changes
-    if (key === 'wifi_ssid' || key === 'wifi_password') {
-      await triggerReload();
-    }
+    // Trigger immediate ESP32 config reload via MQTT for configuration updates
+    await triggerReload();
 
     return NextResponse.json({
       success: true,

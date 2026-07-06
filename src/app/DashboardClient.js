@@ -2,7 +2,7 @@
  
 import { useState, useEffect, useRef } from 'react';
 import mqtt from 'mqtt';
-import { Cylinder, Thermometer, Droplets, Sprout, RefreshCw, Settings, X, Plus, Trash2, Edit2, Wifi, Clock, CloudSun, Calendar, LogOut } from 'lucide-react';
+import { Cylinder, Thermometer, Droplets, Sprout, RefreshCw, Settings, X, Plus, Trash2, Edit2, Wifi, Clock, CloudSun, Calendar, LogOut, MapPin } from 'lucide-react';
 import ActivityLog from '@/components/ActivityLog';
 import NotesModal from '@/components/NotesModal';
 import { signOut } from 'next-auth/react';
@@ -100,6 +100,7 @@ export default function Dashboard({ apiToken }) {
   const [pumpPin, setPumpPin] = useState(25);
   const [pumpFlowRate, setPumpFlowRate] = useState(4.0);
   const [reservoirSensorOffset, setReservoirSensorOffset] = useState(100);
+  const [focusedField, setFocusedField] = useState(null);
 
   // History / Chart States
   const [historyData, setHistoryData] = useState({
@@ -250,7 +251,7 @@ export default function Dashboard({ apiToken }) {
         if (document.visibilityState === 'visible') {
           fetchDashboardData();
         }
-      }, 10000);
+      }, 60000);
     };
 
     const handleVisibilityChange = () => {
@@ -292,6 +293,24 @@ export default function Dashboard({ apiToken }) {
       }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
+  }, []);
+
+  // Locally increment last_seen_seconds every second to keep the connection status updated in real-time
+  // without spamming the backend API.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setDeviceStatus(prev => {
+        if (prev.last_seen_seconds === null) return prev;
+        const nextSeen = prev.last_seen_seconds + 1;
+        const thresholdSeconds = (prev.interval_minutes + 2) * 60;
+        return {
+          ...prev,
+          last_seen_seconds: nextSeen,
+          active: nextSeen <= thresholdSeconds
+        };
+      });
+    }, 1000);
+    return () => clearInterval(timer);
   }, []);
 
   // WebSockets Real-Time Push connection
@@ -1893,7 +1912,9 @@ export default function Dashboard({ apiToken }) {
                   { id: 'pumps', label: 'Pumps', icon: PumpIcon },
                   { id: 'flows', label: 'Watering Flows', icon: Droplets },
                   { id: 'schedules', label: 'Schedules', icon: Clock },
-                  { id: 'general', label: 'General Settings', icon: Cylinder }
+                  { id: 'location', label: 'Location & Time', icon: MapPin },
+                  { id: 'reservoir', label: 'Reservoir Settings', icon: Cylinder },
+                  { id: 'system', label: 'System Settings', icon: Settings }
                 ].map(tab => (
                   <button
                     key={tab.id}
@@ -2364,140 +2385,57 @@ export default function Dashboard({ apiToken }) {
                   </div>
                 )}
 
-                {/* 4. GENERAL SYSTEM CONFIG TAB */}
-                {configTab === 'general' && (
+                {/* 4. LOCATION & TIME TAB */}
+                {configTab === 'location' && (
                   <div className="space-y-6">
-                    <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wider border-b pb-1.5">General Config</h4>
+                    <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wider border-b pb-1.5">Location & Time Configuration</h4>
                     
-                    <div className="space-y-3">
-                      <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Data Fetch & Sync Interval</label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="number"
-                          min="1"
-                          max="1440"
-                          value={customInterval}
-                          onChange={(e) => setCustomInterval(e.target.value)}
-                          className="w-20 bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-zinc-400 text-center font-mono font-semibold"
-                        />
+                    {/* Timezone Card */}
+                    <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-4">
+                      <div className="flex items-center gap-2 border-b pb-2 text-zinc-800">
+                        <Clock className="w-4 h-4 text-blue-500" />
+                        <h5 className="text-[11px] font-bold uppercase tracking-wider">System Timezone</h5>
+                      </div>
+                      <p className="text-[11px] text-zinc-500">
+                        Select the local timezone of the physical watering system. This ensures schedules are executed at the correct time.
+                      </p>
+                      <div className="flex gap-2">
                         <select
-                          value={intervalUnit}
-                          onChange={(e) => setIntervalUnit(e.target.value)}
-                          className="bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-zinc-400 font-semibold cursor-pointer"
+                          value={timezone}
+                          onChange={(e) => setTimezone(e.target.value)}
+                          className="flex-1 bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-zinc-400 font-semibold cursor-pointer"
                         >
-                          <option value="minutes">Minutes</option>
-                          <option value="hours">Hours</option>
+                          <option value="Europe/Bucharest">Europe/Bucharest (GMT+3)</option>
+                          <option value="Europe/London">Europe/London (GMT+1)</option>
+                          <option value="Europe/Paris">Europe/Paris (GMT+2)</option>
+                          <option value="Europe/Athens">Europe/Athens (GMT+3)</option>
+                          <option value="Europe/Budapest">Europe/Budapest (GMT+2)</option>
+                          <option value="UTC">UTC (GMT+0)</option>
                         </select>
                         <button
-                          onClick={handleCustomIntervalSave}
+                          onClick={handleTimezoneSave}
                           disabled={togglingConfig}
-                          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
+                          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-1.5 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
                         >
-                          Save Interval
+                          Save Timezone
                         </button>
                       </div>
                     </div>
 
-                    <div className="space-y-4 pt-4 border-t border-zinc-100 text-xs">
-                      <h5 className="font-bold text-zinc-700 text-xs uppercase tracking-wider">System Timezone (Scheduling)</h5>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">Select timezone</label>
-                        <div className="flex gap-2">
-                          <select
-                            value={timezone}
-                            onChange={(e) => setTimezone(e.target.value)}
-                            className="flex-1 bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-zinc-400 font-semibold cursor-pointer"
-                          >
-                            <option value="Europe/Bucharest">Europe/Bucharest (GMT+3)</option>
-                            <option value="Europe/London">Europe/London (GMT+1)</option>
-                            <option value="Europe/Paris">Europe/Paris (GMT+2)</option>
-                            <option value="Europe/Athens">Europe/Athens (GMT+3)</option>
-                            <option value="Europe/Budapest">Europe/Budapest (GMT+2)</option>
-                            <option value="UTC">UTC (GMT+0)</option>
-                          </select>
-                          <button
-                            onClick={handleTimezoneSave}
-                            disabled={togglingConfig}
-                            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-1.5 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
-                          >
-                            Save Timezone
-                          </button>
-                        </div>
+                    {/* City Location Weather search Card */}
+                    <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-4">
+                      <div className="flex items-center gap-2 border-b pb-2 text-zinc-800">
+                        <CloudSun className="w-4 h-4 text-blue-500" />
+                        <h5 className="text-[11px] font-bold uppercase tracking-wider">System Location (Weather Forecast)</h5>
                       </div>
-                    </div>
-
-                    <div className="space-y-4 pt-4 border-t border-zinc-100 text-xs">
-                      <h5 className="font-bold text-zinc-700 text-xs uppercase tracking-wider">Soil Moisture Skip (Automation)</h5>
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">Moisture Skip Threshold</label>
-                          <span className="text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">
-                            {moistureSkipThreshold === 100 ? 'Disabled' : `${moistureSkipThreshold}%`}
-                          </span>
-                        </div>
-                        <div className="flex gap-4 items-center">
-                          <input
-                            type="range"
-                            min="10"
-                            max="100"
-                            step="5"
-                            value={moistureSkipThreshold}
-                            onChange={(e) => setMoistureSkipThreshold(parseInt(e.target.value, 10))}
-                            className="flex-1 accent-blue-600 cursor-pointer"
-                          />
-                          <button
-                            onClick={handleMoistureSkipSave}
-                            disabled={togglingConfig}
-                            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-1.5 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
-                          >
-                            Save Threshold
-                          </button>
-                        </div>
-                        <p className="text-[10px] text-zinc-400">
-                          If average active soil moisture exceeds this threshold, scheduled watering cycles will be skipped automatically to save water.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4 pt-4 border-t border-zinc-100 text-xs">
-                      <h5 className="font-bold text-zinc-700 text-xs uppercase tracking-wider">Pump Safety Watchdog (Safety)</h5>
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">Max Run Watchdog Timeout</label>
-                          <span className="text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">
-                            {pumpSafetyTimeout} seconds
-                          </span>
-                        </div>
-                        <div className="flex gap-4 items-center">
-                          <input
-                            type="number"
-                            min="10"
-                            max="3600"
-                            step="10"
-                            value={pumpSafetyTimeout}
-                            onChange={(e) => setPumpSafetyTimeout(parseInt(e.target.value, 10) || 300)}
-                            className="flex-1 bg-white border border-zinc-200 rounded-lg py-1.5 px-3 focus:outline-none font-mono"
-                          />
-                          <button
-                            onClick={handlePumpSafetyTimeoutSave}
-                            disabled={togglingConfig}
-                            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-1.5 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
-                          >
-                            Save Timeout
-                          </button>
-                        </div>
-                        <p className="text-[10px] text-zinc-400">
-                          Hardware safety timeout: The ESP32 will automatically turn off any pump relay if it runs continuously for more than this duration (protects against missed MQTT signals or offline state).
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4 pt-4 border-t border-zinc-100 text-xs">
-                      <h5 className="font-bold text-zinc-700 text-xs uppercase tracking-wider">System Location (Weather Forecast)</h5>
+                      <p className="text-[11px] text-zinc-500">
+                        Specify where the system is placed to inject local weather data. This enables automatic rain skips when high precipitation is forecasted.
+                      </p>
+                      
                       {locationName && (
-                        <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 p-2.5 rounded-lg flex items-center justify-between">
+                        <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 p-3 rounded-lg flex items-center justify-between">
                           <div>
-                            <span className="block font-bold text-[10px] uppercase tracking-wider text-emerald-600">Active Location</span>
+                            <span className="block font-bold text-[8px] uppercase tracking-wider text-emerald-600">Active Location</span>
                             <span className="font-semibold text-xs">{locationName}</span>
                             <span className="block text-[8px] text-emerald-600 font-mono mt-0.5">({latitude.toFixed(4)}°, {longitude.toFixed(4)}°)</span>
                           </div>
@@ -2545,128 +2483,424 @@ export default function Dashboard({ apiToken }) {
                         </div>
                       )}
                     </div>
+                  </div>
+                )}
 
-                    <div className="space-y-4 pt-4 border-t border-zinc-100 text-xs">
-                      <h5 className="font-bold text-zinc-700 text-xs uppercase tracking-wider">Water Reservoir Calibration</h5>
+                {/* 5. RESERVOIR SETTINGS TAB */}
+                {configTab === 'reservoir' && (
+                  <div className="space-y-6">
+                    <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wider border-b pb-1.5">Water Reservoir Calibration</h4>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-6 items-start">
                       
-                      {/* Height fields are mandatory and always at the top */}
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Depth / Height (cm)</label>
-                          <input
-                            type="number"
-                            min="1"
-                            value={reservoirHeight}
-                            onChange={(e) => setReservoirHeight(Number(e.target.value))}
-                            className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Sensor Mounting Offset (cm)</label>
-                          <input
-                            type="number"
-                            min="1"
-                            value={reservoirSensorOffset}
-                            onChange={(e) => setReservoirSensorOffset(Number(e.target.value))}
-                            className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Calculation selector */}
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">Volume Calculation Method</label>
-                        <div className="grid grid-cols-2 gap-2 mt-1">
-                          <button
-                            type="button"
-                            onClick={() => setReservoirUseDimensions(false)}
-                            className={`py-1.5 px-3 text-xs font-semibold rounded-lg border transition cursor-pointer ${
-                              !reservoirUseDimensions
-                                ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
-                                : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50'
-                            }`}
-                          >
-                            By Liter Capacity
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setReservoirUseDimensions(true)}
-                            className={`py-1.5 px-3 text-xs font-semibold rounded-lg border transition cursor-pointer ${
-                              reservoirUseDimensions
-                                ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
-                                : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50'
-                            }`}
-                          >
-                            By Tank Dimensions
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Conditional Option Inputs */}
-                      {reservoirUseDimensions ? (
-                        <div className="space-y-3 animate-in fade-in duration-200">
+                      {/* Left: Input fields form (cols 3) */}
+                      <div className="md:col-span-3 space-y-4">
+                        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-4">
                           <div className="grid grid-cols-2 gap-4">
                             <div>
-                              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Width (cm)</label>
+                              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Depth / Height (cm)</label>
                               <input
                                 type="number"
                                 min="1"
-                                value={reservoirWidth}
-                                onChange={(e) => setReservoirWidth(Number(e.target.value))}
+                                value={reservoirHeight}
+                                onChange={(e) => setReservoirHeight(Number(e.target.value))}
+                                onFocus={() => setFocusedField('height')}
+                                onBlur={() => setFocusedField(null)}
+                                onMouseEnter={() => setFocusedField('height')}
+                                onMouseLeave={() => setFocusedField(null)}
                                 className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
                               />
                             </div>
                             <div>
-                              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Length (cm)</label>
+                              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Sensor Mounting Offset (cm)</label>
                               <input
                                 type="number"
                                 min="1"
-                                value={reservoirLength}
-                                onChange={(e) => setReservoirLength(Number(e.target.value))}
+                                value={reservoirSensorOffset}
+                                onChange={(e) => setReservoirSensorOffset(Number(e.target.value))}
+                                onFocus={() => setFocusedField('offset')}
+                                onBlur={() => setFocusedField(null)}
+                                onMouseEnter={() => setFocusedField('offset')}
+                                onMouseLeave={() => setFocusedField(null)}
                                 className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
                               />
                             </div>
                           </div>
-                          <div className="bg-zinc-50 border border-zinc-200 p-2.5 rounded-lg text-center font-semibold text-zinc-600">
-                            Estimated Tank Volume: <span className="text-zinc-900 font-mono">{(Math.round((reservoirWidth * reservoirLength * reservoirHeight) / 100) / 10).toFixed(1)}L</span>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">Volume Calculation Method</label>
+                            <div className="grid grid-cols-2 gap-2 mt-1">
+                              <button
+                                type="button"
+                                onClick={() => setReservoirUseDimensions(false)}
+                                className={`py-1.5 px-3 text-xs font-semibold rounded-lg border transition cursor-pointer ${
+                                  !reservoirUseDimensions
+                                    ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
+                                    : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50'
+                                }`}
+                              >
+                                By Liter Capacity
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setReservoirUseDimensions(true)}
+                                className={`py-1.5 px-3 text-xs font-semibold rounded-lg border transition cursor-pointer ${
+                                  reservoirUseDimensions
+                                    ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
+                                    : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50'
+                                }`}
+                              >
+                                By Tank Dimensions
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Conditional Options */}
+                          {reservoirUseDimensions ? (
+                            <div className="space-y-3 animate-in fade-in duration-200">
+                              <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                  <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Width (cm)</label>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    value={reservoirWidth}
+                                    onChange={(e) => setReservoirWidth(Number(e.target.value))}
+                                    onFocus={() => setFocusedField('width')}
+                                    onBlur={() => setFocusedField(null)}
+                                    onMouseEnter={() => setFocusedField('width')}
+                                    onMouseLeave={() => setFocusedField(null)}
+                                    className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Length (cm)</label>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    value={reservoirLength}
+                                    onChange={(e) => setReservoirLength(Number(e.target.value))}
+                                    onFocus={() => setFocusedField('length')}
+                                    onBlur={() => setFocusedField(null)}
+                                    onMouseEnter={() => setFocusedField('length')}
+                                    onMouseLeave={() => setFocusedField(null)}
+                                    className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                                  />
+                                </div>
+                              </div>
+                              <div className="bg-zinc-50 border border-zinc-200 p-2.5 rounded-lg text-center font-semibold text-zinc-600 text-xs">
+                                Estimated Tank Volume: <span className="text-zinc-900 font-mono">{(Math.round((reservoirWidth * reservoirLength * reservoirHeight) / 100) / 10).toFixed(1)}L</span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="animate-in fade-in duration-200">
+                              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Total Volume Capacity (Liters)</label>
+                              <input
+                                type="number"
+                                min="1"
+                                value={reservoirTotalVolume}
+                                onChange={(e) => setReservoirTotalVolume(Number(e.target.value))}
+                                className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                              />
+                            </div>
+                          )}
+
+                          {/* Safety Limit */}
+                          <div className="pt-2 border-t border-zinc-100">
+                            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Minimum Safety Volume (Liters)</label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              min="0.5"
+                              value={reservoirMinVolume}
+                              onChange={(e) => setReservoirMinVolume(parseFloat(e.target.value))}
+                              onFocus={() => setFocusedField('min_volume')}
+                              onBlur={() => setFocusedField(null)}
+                              onMouseEnter={() => setFocusedField('min_volume')}
+                              onMouseLeave={() => setFocusedField(null)}
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
+                            />
+                            <p className="text-[9px] text-zinc-400 mt-1">
+                              Pumps will lock and scheduled/manual triggers will block if volume falls below this level to prevent dry-running.
+                            </p>
                           </div>
                         </div>
-                      ) : (
-                        <div className="animate-in fade-in duration-200">
-                          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Total Volume Capacity (Liters)</label>
-                          <input
-                            type="number"
-                            min="1"
-                            value={reservoirTotalVolume}
-                            onChange={(e) => setReservoirTotalVolume(Number(e.target.value))}
-                            className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
-                          />
-                        </div>
-                      )}
 
-                      {/* Safety Minimum Limit */}
-                      <div className="pt-2 border-t border-zinc-100">
-                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Minimum Safety Volume (Liters)</label>
-                        <input
-                          type="number"
-                          step="0.5"
-                          min="0.5"
-                          value={reservoirMinVolume}
-                          onChange={(e) => setReservoirMinVolume(parseFloat(e.target.value))}
-                          className="w-full bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 font-mono text-xs text-zinc-800 focus:outline-none focus:border-zinc-400"
-                        />
-                        <p className="text-[9px] text-zinc-400 mt-1">
-                          Pumps will lock and scheduled/manual triggers will block if volume falls below this level to prevent dry-running.
-                        </p>
+                        <button
+                          onClick={handleReservoirSave}
+                          disabled={togglingConfig}
+                          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50 mt-2"
+                        >
+                          Save Reservoir Settings
+                        </button>
                       </div>
 
-                      <button
-                        onClick={handleReservoirSave}
-                        disabled={togglingConfig}
-                        className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50 mt-2"
-                      >
-                        Save Reservoir Settings
-                      </button>
+                      {/* Right: SVG Diagram (cols 2) */}
+                      <div className="md:col-span-2 flex flex-col items-center justify-center bg-zinc-50/50 border border-zinc-100 rounded-xl p-4 shadow-inner">
+                        <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">Visual Calibration Guide</span>
+                        
+                        <svg viewBox="0 0 260 320" className="w-full max-w-[240px] mx-auto select-none">
+                          <defs>
+                            <linearGradient id="waterGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.45" />
+                              <stop offset="100%" stopColor="#1d4ed8" stopOpacity="0.65" />
+                            </linearGradient>
+                            <filter id="glowBlue" x="-20%" y="-20%" width="140%" height="140%">
+                              <feGaussianBlur stdDeviation="3" result="blur" />
+                              <feMerge>
+                                <feMergeNode in="blur" />
+                                <feMergeNode in="SourceGraphic" />
+                              </feMerge>
+                            </filter>
+                          </defs>
+
+                          {/* Ground Line */}
+                          <line x1="10" y1="280" x2="250" y2="280" stroke="#e4e4e7" strokeWidth="2" strokeDasharray="4 4" />
+
+                          {/* Tank Outline */}
+                          <path d="M 50 140 L 50 280 L 170 280 L 170 140" fill="none" stroke="#71717a" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                          <line x1="45" y1="140" x2="55" y2="140" stroke="#71717a" strokeWidth="3" />
+                          <line x1="165" y1="140" x2="175" y2="140" stroke="#71717a" strokeWidth="3" />
+
+                          {/* Water Level representation */}
+                          <rect x="52" y="190" width="116" height="88" fill="url(#waterGrad)" rx="2" />
+                          <path d="M 52 190 Q 80 188 110 190 T 168 190" fill="none" stroke="#2563eb" strokeWidth="2" />
+
+                          {/* Sensor representation */}
+                          <path d="M 110 30 L 110 50" fill="none" stroke="#71717a" strokeWidth="2" />
+                          <rect x="90" y="30" width="40" height="4" fill="#a1a1aa" rx="1" />
+                          <rect x="95" y="46" width="30" height="12" fill="#3f3f46" rx="2" />
+                          <circle cx="102" cy="58" r="4" fill="#18181b" />
+                          <circle cx="118" cy="58" r="4" fill="#18181b" />
+                          
+                          {/* Acoustic waves */}
+                          <path d="M 100 68 Q 110 74 120 68" fill="none" stroke="#a1a1aa" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
+                          <path d="M 96 74 Q 110 82 124 74" fill="none" stroke="#a1a1aa" strokeWidth="1.5" strokeLinecap="round" opacity="0.4" />
+
+                          {/* Dimensions lines */}
+                          
+                          {/* 1. Sensor Mounting Offset */}
+                          <g 
+                            className="cursor-pointer"
+                            onMouseEnter={() => setFocusedField('offset')}
+                            onMouseLeave={() => setFocusedField(null)}
+                          >
+                            <line 
+                              x1="210" y1="52" x2="210" y2="280" 
+                              stroke={focusedField === 'offset' ? '#f59e0b' : '#a1a1aa'} 
+                              strokeWidth={focusedField === 'offset' ? '3' : '1.5'}
+                              filter={focusedField === 'offset' ? 'url(#glowBlue)' : ''}
+                            />
+                            <path d="M 206 58 L 210 52 L 214 58" fill="none" stroke={focusedField === 'offset' ? '#f59e0b' : '#a1a1aa'} strokeWidth="1.5" />
+                            <path d="M 206 274 L 210 280 L 214 274" fill="none" stroke={focusedField === 'offset' ? '#f59e0b' : '#a1a1aa'} strokeWidth="1.5" />
+                            <text 
+                              x="220" y="160" 
+                              fill={focusedField === 'offset' ? '#d97706' : '#71717a'} 
+                              fontSize="9" 
+                              fontWeight={focusedField === 'offset' ? 'bold' : 'normal'}
+                              transform="rotate(90, 220, 160)"
+                              textAnchor="middle"
+                            >
+                              Sensor Offset ({reservoirSensorOffset} cm)
+                            </text>
+                          </g>
+
+                          {/* 2. Tank Height */}
+                          <g 
+                            className="cursor-pointer"
+                            onMouseEnter={() => setFocusedField('height')}
+                            onMouseLeave={() => setFocusedField(null)}
+                          >
+                            <line 
+                              x1="24" y1="140" x2="24" y2="280" 
+                              stroke={focusedField === 'height' ? '#3b82f6' : '#a1a1aa'} 
+                              strokeWidth={focusedField === 'height' ? '3' : '1.5'}
+                              filter={focusedField === 'height' ? 'url(#glowBlue)' : ''}
+                            />
+                            <path d="M 20 146 L 24 140 L 28 146" fill="none" stroke={focusedField === 'height' ? '#3b82f6' : '#a1a1aa'} strokeWidth="1.5" />
+                            <path d="M 20 274 L 24 280 L 28 274" fill="none" stroke={focusedField === 'height' ? '#3b82f6' : '#a1a1aa'} strokeWidth="1.5" />
+                            <text 
+                              x="14" y="210" 
+                              fill={focusedField === 'height' ? '#2563eb' : '#71717a'} 
+                              fontSize="9" 
+                              fontWeight={focusedField === 'height' ? 'bold' : 'normal'}
+                              transform="rotate(-90, 14, 210)"
+                              textAnchor="middle"
+                            >
+                              Tank Depth ({reservoirHeight} cm)
+                            </text>
+                          </g>
+
+                          {/* 3. Safety Minimum Limit */}
+                          <g
+                            className="cursor-pointer"
+                            onMouseEnter={() => setFocusedField('min_volume')}
+                            onMouseLeave={() => setFocusedField(null)}
+                          >
+                            <line 
+                              x1="52" y1="240" x2="168" y2="240" 
+                              stroke="#ef4444" 
+                              strokeWidth={focusedField === 'min_volume' ? '2.5' : '1.5'}
+                              strokeDasharray="3 2"
+                            />
+                            <text 
+                              x="110" y="234" 
+                              fill="#ef4444" 
+                              fontSize="8" 
+                              fontWeight="bold"
+                              textAnchor="middle"
+                            >
+                              Min Safety ({reservoirMinVolume}L)
+                            </text>
+                          </g>
+
+                          {/* 4. Tank Width */}
+                          {reservoirUseDimensions && (
+                            <g
+                              className="cursor-pointer"
+                              onMouseEnter={() => setFocusedField('width')}
+                              onMouseLeave={() => setFocusedField(null)}
+                            >
+                              <line 
+                                x1="50" y1="294" x2="170" y2="294" 
+                                stroke={focusedField === 'width' ? '#3b82f6' : '#d4d4d8'} 
+                                strokeWidth={focusedField === 'width' ? '2' : '1'}
+                              />
+                              <path d="M 56 290 L 50 294 L 56 298" fill="none" stroke={focusedField === 'width' ? '#3b82f6' : '#d4d4d8'} strokeWidth="1" />
+                              <path d="M 164 290 L 170 294 L 164 298" fill="none" stroke={focusedField === 'width' ? '#3b82f6' : '#d4d4d8'} strokeWidth="1" />
+                              <text 
+                                x="110" y="306" 
+                                fill={focusedField === 'width' ? '#2563eb' : '#a1a1aa'} 
+                                fontSize="8"
+                                fontWeight={focusedField === 'width' ? 'bold' : 'normal'}
+                                textAnchor="middle"
+                              >
+                                Width ({reservoirWidth} cm)
+                              </text>
+                            </g>
+                          )}
+                        </svg>
+                      </div>
+
+                    </div>
+                  </div>
+                )}
+
+                {/* 6. SYSTEM SETTINGS TAB */}
+                {configTab === 'system' && (
+                  <div className="space-y-6">
+                    <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wider border-b pb-1.5">System Settings & Safety</h4>
+                    
+                    {/* Fetch Sync Interval Card */}
+                    <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-4">
+                      <div className="flex items-center gap-2 border-b pb-2 text-zinc-800">
+                        <RefreshCw className="w-4 h-4 text-blue-500" />
+                        <h5 className="text-[11px] font-bold uppercase tracking-wider">Data Fetch & Sync Interval</h5>
+                      </div>
+                      <p className="text-[11px] text-zinc-500">
+                        Configure how often the ESP32 watering controller wakes up to report telemetry and synchronise settings with this cloud dashboard.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="1"
+                          max="1440"
+                          value={customInterval}
+                          onChange={(e) => setCustomInterval(e.target.value)}
+                          className="w-20 bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-zinc-400 text-center font-mono font-semibold"
+                        />
+                        <select
+                          value={intervalUnit}
+                          onChange={(e) => setIntervalUnit(e.target.value)}
+                          className="bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-zinc-400 font-semibold cursor-pointer"
+                        >
+                          <option value="minutes">Minutes</option>
+                          <option value="hours">Hours</option>
+                        </select>
+                        <button
+                          onClick={handleCustomIntervalSave}
+                          disabled={togglingConfig}
+                          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
+                        >
+                          Save Interval
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Moisture skip trigger Card */}
+                    <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-4">
+                      <div className="flex items-center gap-2 border-b pb-2 text-zinc-800">
+                        <Sprout className="w-4 h-4 text-blue-500" />
+                        <h5 className="text-[11px] font-bold uppercase tracking-wider">Soil Moisture Automation Skip</h5>
+                      </div>
+                      <p className="text-[11px] text-zinc-500">
+                        Pumps will automatically skip scheduled events if the average soil moisture exceeds this percentage.
+                      </p>
+                      
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">Moisture Skip Threshold</label>
+                          <span className="text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">
+                            {moistureSkipThreshold === 100 ? 'Disabled' : `${moistureSkipThreshold}%`}
+                          </span>
+                        </div>
+                        <div className="flex gap-4 items-center">
+                          <input
+                            type="range"
+                            min="10"
+                            max="100"
+                            step="5"
+                            value={moistureSkipThreshold}
+                            onChange={(e) => setMoistureSkipThreshold(parseInt(e.target.value, 10))}
+                            className="flex-1 accent-blue-600 cursor-pointer"
+                          />
+                          <button
+                            onClick={handleMoistureSkipSave}
+                            disabled={togglingConfig}
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-1.5 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
+                          >
+                            Save Threshold
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Watchdog Safety Card */}
+                    <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-4">
+                      <div className="flex items-center gap-2 border-b pb-2 text-zinc-800">
+                        <Settings className="w-4 h-4 text-blue-500" />
+                        <h5 className="text-[11px] font-bold uppercase tracking-wider">Pump Safety Watchdog</h5>
+                      </div>
+                      <p className="text-[11px] text-zinc-500">
+                        The maximum safety duration a pump is allowed to run continuously. The ESP32 will force-shut the valve if this threshold is crossed to prevent flooding.
+                      </p>
+                      
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">Max Run Watchdog Timeout</label>
+                          <span className="text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">
+                            {pumpSafetyTimeout} seconds
+                          </span>
+                        </div>
+                        <div className="flex gap-4 items-center">
+                          <input
+                            type="number"
+                            min="10"
+                            max="3600"
+                            step="10"
+                            value={pumpSafetyTimeout}
+                            onChange={(e) => setPumpSafetyTimeout(parseInt(e.target.value, 10) || 300)}
+                            className="flex-1 bg-zinc-50 border border-zinc-200 rounded-lg py-1.5 px-3 focus:outline-none font-mono text-xs text-zinc-800 focus:border-zinc-400 font-semibold"
+                          />
+                          <button
+                            onClick={handlePumpSafetyTimeoutSave}
+                            disabled={togglingConfig}
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-1.5 text-xs rounded-xl cursor-pointer shadow-sm active:scale-95 transition-all w-fit disabled:opacity-50"
+                          >
+                            Save Timeout
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}
