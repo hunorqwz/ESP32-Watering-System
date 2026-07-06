@@ -24,13 +24,23 @@ try {
 }
 
 const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+const token = process.env.API_ACCESS_TOKEN || 'default-watering-system-secure-token';
 
 async function runTests() {
   console.log('--- STARTING PERSISTENT SYSTEM NOTES CRUD TESTS ---');
 
+  const authHeaders = {
+    'Authorization': `Bearer ${token}`
+  };
+
+  const jsonHeaders = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`
+  };
+
   // 1. Fetch initial notes (should contain at least the seeded Welcome Note)
   console.log('\n[Test 1] Fetching notes...');
-  let res = await fetch(`${baseUrl}/api/notes`);
+  let res = await fetch(`${baseUrl}/api/notes`, { headers: authHeaders });
   let body = await res.json();
   console.log('Fetch Status:', res.status);
   console.log('Notes count:', body.notes?.length);
@@ -46,7 +56,7 @@ async function runTests() {
   console.log('\n[Test 2] Creating a new note...');
   res = await fetch(`${baseUrl}/api/notes`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: jsonHeaders,
     body: JSON.stringify({
       title: 'Gardening Reminder',
       content: 'Fertilize the tomato plants on Sunday morning.'
@@ -63,7 +73,7 @@ async function runTests() {
   }
 
   // Verify it exists and get its ID
-  res = await fetch(`${baseUrl}/api/notes`);
+  res = await fetch(`${baseUrl}/api/notes`, { headers: authHeaders });
   body = await res.json();
   const createdNote = body.notes.find(n => n.title === 'Gardening Reminder');
   if (!createdNote) {
@@ -77,7 +87,7 @@ async function runTests() {
   console.log('\n[Test 3] Updating the note...');
   res = await fetch(`${baseUrl}/api/notes`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: jsonHeaders,
     body: JSON.stringify({
       id: noteId,
       title: 'Gardening Reminder (Updated)',
@@ -95,7 +105,7 @@ async function runTests() {
   }
 
   // Verify update
-  res = await fetch(`${baseUrl}/api/notes`);
+  res = await fetch(`${baseUrl}/api/notes`, { headers: authHeaders });
   body = await res.json();
   const updatedNote = body.notes.find(n => n.id === noteId);
   if (updatedNote && updatedNote.title === 'Gardening Reminder (Updated)') {
@@ -109,7 +119,8 @@ async function runTests() {
   // 4. Delete the note
   console.log('\n[Test 4] Deleting the note...');
   res = await fetch(`${baseUrl}/api/notes?id=${noteId}`, {
-    method: 'DELETE'
+    method: 'DELETE',
+    headers: authHeaders
   });
   body = await res.json();
   console.log('Delete Status:', res.status);
@@ -122,7 +133,7 @@ async function runTests() {
   }
 
   // Verify deletion
-  res = await fetch(`${baseUrl}/api/notes`);
+  res = await fetch(`${baseUrl}/api/notes`, { headers: authHeaders });
   body = await res.json();
   const deletedNote = body.notes.find(n => n.id === noteId);
   if (!deletedNote) {

@@ -6,7 +6,17 @@ CREATE TABLE IF NOT EXISTS system_config (
 );
 
 -- RELATIONAL SYSTEM SCHEMAS
--- 1. Table for dynamic sensor configurations
+-- 1. Table for dynamic pump configurations
+CREATE TABLE IF NOT EXISTS pump_configs (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    pin INT NOT NULL,
+    state INT NOT NULL DEFAULT 0,          -- 0 = Off, 1 = On
+    flow_rate_lpm REAL DEFAULT 4.0,        -- Liters per minute flow rate
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2. Table for dynamic sensor configurations
 CREATE TABLE IF NOT EXISTS sensor_configs (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
@@ -17,16 +27,6 @@ CREATE TABLE IF NOT EXISTS sensor_configs (
     dry_limit INT DEFAULT 3400,           -- Analog limit for dry soil/empty tank
     wet_limit INT DEFAULT 1100,           -- Analog limit for wet soil/full tank
     pump_id INT REFERENCES pump_configs(id) ON DELETE SET NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- 2. Table for dynamic pump configurations
-CREATE TABLE IF NOT EXISTS pump_configs (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    pin INT NOT NULL,
-    state INT NOT NULL DEFAULT 0,          -- 0 = Off, 1 = On
-    flow_rate_lpm REAL DEFAULT 4.0,        -- Liters per minute flow rate
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -112,6 +112,66 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(100) UNIQUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+
+-- Functions and triggers to enforce relational integrity on array fields
+CREATE OR REPLACE FUNCTION validate_watering_flow_sensors() RETURNS TRIGGER AS $$
+DECLARE
+    invalid_sensor_id INT;
+BEGIN
+    SELECT val INTO invalid_sensor_id
+    FROM unnest(NEW.sensor_ids) AS val
+    LEFT JOIN sensor_configs s ON s.id = val
+    WHERE s.id IS NULL
+    LIMIT 1;
+
+    IF invalid_sensor_id IS NOT NULL THEN
+        RAISE EXCEPTION 'Sensor ID % does not exist in sensor_configs', invalid_sensor_id;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_validate_watering_flow_sensors
+BEFORE INSERT OR UPDATE ON watering_flows
+FOR EACH ROW EXECUTE FUNCTION validate_watering_flow_sensors();
+
+CREATE OR REPLACE FUNCTION validate_watering_schedule_refs() RETURNS TRIGGER AS $$
+DECLARE
+    invalid_flow_id INT;
+    invalid_pump_id INT;
+BEGIN
+    IF NEW.flow_ids IS NOT NULL THEN
+        SELECT val INTO invalid_flow_id
+        FROM unnest(NEW.flow_ids) AS val
+        LEFT JOIN watering_flows f ON f.id = val
+        WHERE f.id IS NULL
+        LIMIT 1;
+
+        IF invalid_flow_id IS NOT NULL THEN
+            RAISE EXCEPTION 'Flow ID % does not exist in watering_flows', invalid_flow_id;
+        END IF;
+    END IF;
+
+    IF NEW.pump_ids IS NOT NULL THEN
+        SELECT val INTO invalid_pump_id
+        FROM unnest(NEW.pump_ids) AS val
+        LEFT JOIN pump_configs p ON p.id = val
+        WHERE p.id IS NULL
+        LIMIT 1;
+
+        IF invalid_pump_id IS NOT NULL THEN
+            RAISE EXCEPTION 'Pump ID % does not exist in pump_configs', invalid_pump_id;
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_validate_watering_schedule_refs
+BEFORE INSERT OR UPDATE ON watering_schedules
+FOR EACH ROW EXECUTE FUNCTION validate_watering_schedule_refs();
 
 
 -- CONDITIONAL DATA SEEDING (Executes only if tables are completely empty)

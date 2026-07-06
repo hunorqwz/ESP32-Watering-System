@@ -50,6 +50,14 @@ async function publishMqttCommand(apiUrl, apiKey, apiSecret, pumpId, state) {
 export async function GET(request) {
   // CRON_SECRET authorization check
   const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret && process.env.NODE_ENV === 'production') {
+    console.error('CRON_SECRET environment variable is missing in production.');
+    return NextResponse.json(
+      { success: false, error: 'Unauthorized: CRON_SECRET is not configured on the production server.' },
+      { status: 401 }
+    );
+  }
+
   if (cronSecret) {
     const authHeader = request.headers.get('authorization');
     const urlToken = new URL(request.url).searchParams.get('token');

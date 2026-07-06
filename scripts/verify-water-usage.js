@@ -46,7 +46,10 @@ async function main() {
     console.log('\n[Step 1] Ingesting starting water level telemetry (20cm distance)...');
     const t0Res = await fetch(`${baseUrl}/api/ingest`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({
         deviceId: 'esp32_test_local',
         readings: [
@@ -130,7 +133,10 @@ async function main() {
 
     const t1Res = await fetch(`${baseUrl}/api/ingest`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({
         deviceId: 'esp32_test_local',
         readings: [

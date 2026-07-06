@@ -34,6 +34,8 @@ export const config = {
     '/api/pump/:path*',
     '/api/sensor/:path*',
     '/api/schedule/:path*',
-    '/api/refresh/:path*'
+    '/api/refresh/:path*',
+    '/api/flow/:path*',
+    '/api/weather/:path*'
   ]
 };

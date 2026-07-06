@@ -89,7 +89,10 @@ async function runTests() {
     console.log('\n[Test 2] Injecting dry weather forecast for tomorrow...');
     const resClearWeather = await fetch(`${baseUrl}/api/weather`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({
         forecast: [
           {
@@ -127,7 +130,10 @@ async function runTests() {
     console.log('\n[Test 3] Injecting heavy rain weather forecast for tomorrow...');
     const resRainWeather = await fetch(`${baseUrl}/api/weather`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({
         forecast: [
           {

@@ -45,7 +45,7 @@ struct PumpConfig {
   int pin;
   int state;
   unsigned long turnedOnAt;         // Watchdog: Timestamp when pump was turned on
-  unsigned long scheduledOffAt;    // Local schedule duration countdown timer
+  unsigned long scheduleDurationMs; // Duration of active scheduled run in milliseconds
   bool hasScheduleTimer;            // Flag indicating if a local timer is active
 };
 
@@ -183,7 +183,7 @@ void setupDefaultConfig() {
     pumps[i].pin = defaultPumpPins[i];
     pumps[i].state = 0;
     pumps[i].turnedOnAt = 0;
-    pumps[i].scheduledOffAt = 0;
+    pumps[i].scheduleDurationMs = 0;
     pumps[i].hasScheduleTimer = false;
     
     pinMode(pumps[i].pin, OUTPUT);
@@ -611,24 +611,37 @@ void setup() {
   client.setBufferSize(1024);
 }
 
-// --- Reconnection Logic ---
-void reconnect() {
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi connection lost. Attempting to reconnect...");
-    delay(1000);
+// --- Reconnection Logic (Non-blocking) ---
+void reconnectNonBlocking() {
+  // If WiFi is not connected, attempt reconnection without blocking the main loop
+  if (WiFi.status() != WL_CONNECTED) {
+    static unsigned long lastWiFiCheck = 0;
+    unsigned long now = millis();
+    if (now - lastWiFiCheck >= 10000) { // Try to reconnect WiFi every 10s
+      lastWiFiCheck = now;
+      Serial.println("WiFi connection lost. Attempting to reconnect...");
+      WiFi.disconnect();
+      WiFi.begin(ssid, password);
+    }
+    return;
   }
-  
-  while (!client.connected()) {
-    Serial.print("Connecting to EMQX TLS server... ");
-    if (client.connect("ESP32_Watering_Client", mqtt_user, mqtt_pass)) {
-      Serial.println("MQTT Connection established!");
-      client.subscribe("device/commands");
-      client.subscribe("device/config");
-    } else {
-      Serial.print("Connection rejected, error rc=");
-      Serial.print(client.state());
-      Serial.println(". Re-attempting connection in 5 seconds...");
-      delay(5000);
+
+  // Attempt MQTT connection if offline without blocking the main loop
+  if (!client.connected()) {
+    static unsigned long lastMqttRetry = 0;
+    unsigned long now = millis();
+    if (now - lastMqttRetry >= 10000) { // Try to connect MQTT every 10s
+      lastMqttRetry = now;
+      Serial.print("Connecting to EMQX TLS server... ");
+      if (client.connect("ESP32_Watering_Client", mqtt_user, mqtt_pass)) {
+        Serial.println("MQTT Connection established!");
+        client.subscribe("device/commands");
+        client.subscribe("device/config");
+      } else {
+        Serial.print("Connection rejected, error rc=");
+        Serial.print(client.state());
+        Serial.println(". Will retry MQTT in 10 seconds.");
+      }
     }
   }
 }
@@ -649,7 +662,7 @@ void triggerScheduleCycle(LocalSchedule& s) {
         digitalWrite(pumps[p].pin, LOW); // ON
         pumps[p].state = 1;
         pumps[p].turnedOnAt = millis();
-        pumps[p].scheduledOffAt = millis() + ((unsigned long)s.durationSeconds * 1000);
+        pumps[p].scheduleDurationMs = (unsigned long)s.durationSeconds * 1000;
         pumps[p].hasScheduleTimer = true;
         Serial.printf("  -> Pump [%d] (Pin %d) ON for %d seconds\n", targetPumpId, pumps[p].pin, s.durationSeconds);
       }
@@ -667,7 +680,7 @@ void triggerScheduleCycle(LocalSchedule& s) {
             digitalWrite(pumps[p].pin, LOW); // ON
             pumps[p].state = 1;
             pumps[p].turnedOnAt = millis();
-            pumps[p].scheduledOffAt = millis() + ((unsigned long)s.durationSeconds * 1000);
+            pumps[p].scheduleDurationMs = (unsigned long)s.durationSeconds * 1000;
             pumps[p].hasScheduleTimer = true;
             Serial.printf("  -> Zone Flow [%s] Pump [%d] (Pin %d) ON for %d seconds\n", flows[f].name, pumpId, pumps[p].pin, s.durationSeconds);
           }
@@ -730,8 +743,8 @@ void checkLocalSchedules() {
     int standardWDay = currentWDay == 0 ? 7 : currentWDay; // 1 = Monday ... 7 = Sunday
 
     static int lastCheckedMinute = -1;
-    // Check once at the start of a new minute
-    if (currentMinute != lastCheckedMinute && currentSecond == 0) {
+    // Check once per minute transition
+    if (currentMinute != lastCheckedMinute) {
       lastCheckedMinute = currentMinute;
       Serial.printf("Evaluating local offline schedules for time %02d:%02d...\n", currentHour, currentMinute);
 
@@ -764,8 +777,8 @@ void manageWatchdogs() {
   
   for (int i = 0; i < pumpCount; i++) {
     if (pumps[i].state == 1) {
-      // 1. Local schedule duration cutoff
-      if (pumps[i].hasScheduleTimer && now >= pumps[i].scheduledOffAt) {
+      // 1. Local schedule duration cutoff (rollover-proof)
+      if (pumps[i].hasScheduleTimer && (now - pumps[i].turnedOnAt >= pumps[i].scheduleDurationMs)) {
         Serial.printf("Local schedule duration complete: Shutting down Pump [%d]\n", pumps[i].id);
         digitalWrite(pumps[i].pin, HIGH); // Turn relay OFF
         pumps[i].state = 0;
@@ -789,8 +802,10 @@ void manageWatchdogs() {
 
 // --- Main Operational Loop ---
 void loop() {
-  if (!client.connected()) reconnect();
-  client.loop();
+  reconnectNonBlocking();
+  if (client.connected()) {
+    client.loop();
+  }
 
   // Evaluate local offline schedules
   checkLocalSchedules();

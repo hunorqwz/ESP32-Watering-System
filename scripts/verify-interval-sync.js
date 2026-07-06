@@ -44,7 +44,10 @@ async function runTest() {
   console.log('Sending config update: telemetry_interval_minutes = 180...');
   const res = await fetch(`${baseUrl}/api/config`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+    },
     body: JSON.stringify({ key: 'telemetry_interval_minutes', value: '180' })
   });
   const body = await res.json();
@@ -60,7 +63,9 @@ async function runTest() {
 
   // 2. Fetch dashboard configs to confirm value
   console.log('Querying dashboard dataset endpoint...');
-  const dashRes = await fetch(`${baseUrl}/api/dashboard`);
+  const dashRes = await fetch(`${baseUrl}/api/dashboard`, {
+    headers: { 'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}` }
+  });
   const dashBody = await dashRes.json();
   
   const savedMins = dashBody.configs ? parseInt(dashBody.configs['telemetry_interval_minutes'], 10) : null;
@@ -79,7 +84,10 @@ async function runTest() {
   try {
     await fetch(`${baseUrl}/api/config`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.API_ACCESS_TOKEN}`
+      },
       body: JSON.stringify({ key: 'telemetry_interval_minutes', value: originalInterval })
     });
     console.log('Telemetry interval configuration successfully restored.');

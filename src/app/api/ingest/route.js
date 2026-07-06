@@ -20,6 +20,18 @@ function getEmqxConfig(apiUrl, apiKey, apiSecret) {
 }
 
 export async function POST(request) {
+  // Validate API Access Token
+  const authHeader = request.headers.get('Authorization');
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+  const secretToken = process.env.API_ACCESS_TOKEN;
+
+  if (!secretToken || token !== secretToken) {
+    return NextResponse.json(
+      { success: false, error: 'Unauthorized: Invalid or missing access token.' },
+      { status: 401 }
+    );
+  }
+
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.error('DATABASE_URL environment variable is missing.');
