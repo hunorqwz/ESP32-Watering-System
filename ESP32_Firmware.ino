@@ -771,6 +771,31 @@ void setup() {
       } else {
         Serial.println("\nWiFi rollback failed. Booting offline.");
       }
+    } else if (active_ssid != fallback_ssid) {
+      // Try connecting to fallback compile-time WiFi credentials as a secondary backup
+      Serial.printf("Trying fallback WiFi: %s\n", fallback_ssid);
+      WiFi.disconnect();
+      WiFi.begin(fallback_ssid, fallback_password);
+      attempt = 0;
+      while (WiFi.status() != WL_CONNECTED && attempt < 20) { // Try for 10 seconds
+        delay(500);
+        Serial.print(".");
+        attempt++;
+      }
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nWiFi successfully connected to fallback. Updating active configuration in Flash.");
+        active_ssid = fallback_ssid;
+        active_password = fallback_password;
+        
+        preferences.begin("irrigation", false);
+        preferences.putString("wifi_ssid", active_ssid);
+        preferences.putString("wifi_pass", active_password);
+        preferences.end();
+        
+        fetchConfiguration();
+      } else {
+        Serial.println("\nFallback WiFi connection failed. Booting offline.");
+      }
     } else {
       Serial.println("Booting offline.");
     }
