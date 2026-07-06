@@ -75,16 +75,27 @@ export async function GET() {
 
         const tempForecastData = await fetchLiveForecast(lat, lng);
 
-        for (const day of tempForecastData) {
+        if (tempForecastData.length > 0) {
+          const dates = tempForecastData.map(d => d.forecast_date);
+          const probs = tempForecastData.map(d => d.precipitation_probability);
+          const mms = tempForecastData.map(d => d.expected_precipitation_mm);
+          const payloads = tempForecastData.map(d => JSON.stringify({ temp_c: d.temp_c, description: d.description }));
+
           await sql`
             INSERT INTO weather_forecast_cache (forecast_date, precipitation_probability, expected_precipitation_mm, raw_payload, updated_at)
-            VALUES (
-              ${day.forecast_date}::date, 
-              ${day.precipitation_probability}, 
-              ${day.expected_precipitation_mm}, 
-              ${JSON.stringify({ temp_c: day.temp_c, description: day.description })}::jsonb,
+            SELECT 
+              u.f_date::date, 
+              u.prob::real, 
+              u.mm::real, 
+              u.payload::jsonb,
               CURRENT_TIMESTAMP
-            )
+            FROM (
+              SELECT 
+                unnest(${dates}::text[]) as f_date, 
+                unnest(${probs}::real[]) as prob, 
+                unnest(${mms}::real[]) as mm, 
+                unnest(${payloads}::text[]) as payload
+            ) u
             ON CONFLICT (forecast_date) DO UPDATE
             SET 
               precipitation_probability = EXCLUDED.precipitation_probability,

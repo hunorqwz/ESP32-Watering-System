@@ -76,3 +76,5 @@
 2026-07-06T09:18:52.830Z - RAW: {"deviceId":"esp32_stress_client","readings":[{"sensorId":1,"value":1970},{"sensorId":8,"value":50}]}
 2026-07-06T09:18:52.839Z - RAW: {"deviceId":"esp32_stress_client","readings":[{"sensorId":1,"value":1980},{"sensorId":8,"value":50}]}
 2026-07-06T09:18:52.844Z - RAW: {"deviceId":"esp32_stress_client","readings":[{"sensorId":1,"value":1990},{"sensorId":8,"value":50}]}
+2026-07-06T10:06:24.005Z - RAW: {"deviceId":"esp32_test_local","readings":[{"sensorId":8,"value":20}]}
+2026-07-06T10:06:25.001Z - RAW: {"deviceId":"esp32_test_local","readings":[{"sensorId":8,"value":90}]}

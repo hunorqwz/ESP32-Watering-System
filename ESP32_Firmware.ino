@@ -5,6 +5,7 @@
 #include <DHT.h>
 #include <HTTPClient.h>
 #include <time.h>
+#include <Preferences.h>
 
 // --- Configuration & Host Constants ---
 // Setup default static connection parameters (updated on boot if dynamic config matches)
@@ -128,6 +129,79 @@ bool forceBootTelemetry = true;
 unsigned long pumpSafetyTimeout = 300;     // Safety Watchdog: defaults to 5 minutes (300 seconds)
 long timezoneOffsetSeconds = 7200;          // Timezone offset: defaults to GMT+2 (Europe/Bucharest)
 bool timeSynced = false;
+
+// --- Preferences Flash Storage & Safety Fallbacks ---
+Preferences preferences;
+
+void saveSchedulesToFlash() {
+  preferences.begin("irrigation", false);
+  preferences.putInt("schedCount", scheduleCount);
+  preferences.putBytes("schedules", schedules, sizeof(schedules));
+  preferences.end();
+  Serial.println("Schedules saved to flash memory.");
+}
+
+void loadSchedulesFromFlash() {
+  preferences.begin("irrigation", true);
+  int count = preferences.getInt("schedCount", 0);
+  if (count > 0 && count <= 10) {
+    scheduleCount = count;
+    preferences.getBytes("schedules", schedules, sizeof(schedules));
+    Serial.printf("Loaded %d schedules from flash memory.\n", scheduleCount);
+  }
+  preferences.end();
+}
+
+void saveLastKnownTime(time_t t) {
+  preferences.begin("irrigation", false);
+  preferences.putLong("lastTime", (long)t);
+  preferences.end();
+}
+
+void loadLastKnownTime() {
+  preferences.begin("irrigation", true);
+  long t = preferences.getLong("lastTime", 0);
+  preferences.end();
+  if (t > 0 && !timeSynced) {
+    struct timeval tv;
+    tv.tv_sec = t;
+    tv.tv_usec = 0;
+    settimeofday(&tv, NULL);
+    Serial.printf("Offline boot: System clock set to last known time: %ld\n", t);
+    timeSynced = true; 
+  }
+}
+
+float getWaterLevel(); // Forward declaration for safety check function
+
+bool checkReservoirSafety() {
+  for (int i = 0; i < sensorCount; i++) {
+    if (strcmp(sensors[i].type, "water_level") == 0) {
+      float dist = getWaterLevel();
+      if (dist > 0) {
+        int dry = sensors[i].dryLimit;
+        int wet = sensors[i].wetLimit;
+        int height = dry - wet;
+        float waterHeight = (float)dry - dist;
+        if (waterHeight < 0) waterHeight = 0;
+        
+        float pct = 0;
+        if (height > 0) {
+          pct = (waterHeight / (float)height) * 100.0;
+        } else {
+          pct = 100.0;
+        }
+        
+        if (pct < 10.0) {
+          Serial.printf("Local Safety Lockout: Reservoir water level too low (%.1f%%, distance: %.1f cm). Blocking pump.\n", pct, dist);
+          return false;
+        }
+      }
+      break;
+    }
+  }
+  return true;
+}
 
 // --- Fallback Local Configurations ---
 void setupDefaultConfig() {
@@ -459,6 +533,8 @@ void fetchConfiguration() {
           scheduleCount++;
         }
       }
+      // Save schedules to flash memory after parsing successfully
+      saveSchedulesToFlash();
     } else {
       Serial.printf("Server rejected config request: %s\n", doc["error"].as<const char*>());
     }
@@ -515,6 +591,13 @@ void sendTelemetry() {
   
   client.publish("device/sensorData", out);
   Serial.println("Relational Telemetry sent to EMQX.");
+
+  // Save current time to flash as last known time if we have synced time
+  if (timeSynced) {
+    time_t nowTime;
+    time(&nowTime);
+    saveLastKnownTime(nowTime);
+  }
 }
 
 // --- MQTT Commands/Config Callback ---
@@ -536,6 +619,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
       bool resolved = false;
       for (int i = 0; i < pumpCount; i++) {
         if (pumps[i].id == pumpId) {
+          if (state == 1 && !checkReservoirSafety()) {
+            Serial.printf("Output toggle rejected: Pump ID %d safety lockout active.\n", pumpId);
+            return;
+          }
           digitalWrite(pumps[i].pin, state ? LOW : HIGH);
           pumps[i].state = state;
           
@@ -593,16 +680,28 @@ void setup() {
   Serial.print("Connecting to WiFi: ");
   Serial.println(ssid);
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
+  int attempt = 0;
+  while (WiFi.status() != WL_CONNECTED && attempt < 20) { // Try for 10 seconds
     delay(500);
     Serial.print(".");
+    attempt++;
   }
-  Serial.println("\nWiFi network active.");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi network active.");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+    // Dynamic configuration fetch from Next.js server on boot
+    fetchConfiguration();
+  } else {
+    Serial.println("\nWiFi connection timed out. Booting in offline mode.");
+  }
 
-  // Dynamic configuration fetch from Next.js server on boot (includes local schedule sync and watchdog setup)
-  fetchConfiguration();
+  // Load fallback schedules and time from flash if not fetched/synced
+  if (scheduleCount == 0) {
+    loadSchedulesFromFlash();
+  }
+  loadLastKnownTime();
 
   // Configure MQTT
   espClient.setCACert(ca_cert);
@@ -637,6 +736,8 @@ void reconnectNonBlocking() {
         Serial.println("MQTT Connection established!");
         client.subscribe("device/commands");
         client.subscribe("device/config");
+        // Fetch dynamic configuration after connection recovery
+        fetchConfiguration();
       } else {
         Serial.print("Connection rejected, error rc=");
         Serial.print(client.state());
@@ -648,6 +749,11 @@ void reconnectNonBlocking() {
 
 // --- Helper to trigger a schedule watering cycle ---
 void triggerScheduleCycle(LocalSchedule& s) {
+  if (!checkReservoirSafety()) {
+    Serial.println("Scheduled cycle aborted: local reservoir safety lockout active.");
+    s.isPulseActive = false;
+    return;
+  }
   s.isPulseActive = true;
   s.isSoaking = false;
   s.lastPhaseTimestamp = millis();

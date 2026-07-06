@@ -241,3 +241,59 @@ SELECT setval(pg_get_serial_sequence('system_notes', 'id'), COALESCE(max(id), 1)
 SELECT setval(pg_get_serial_sequence('watering_schedules', 'id'), COALESCE(max(id), 1)) FROM watering_schedules;
 SELECT setval(pg_get_serial_sequence('watering_flows', 'id'), COALESCE(max(id), 1)) FROM watering_flows;
 SELECT setval(pg_get_serial_sequence('users', 'id'), COALESCE(max(id), 1)) FROM users;
+
+
+-- PERFORMANCE INDEXES (GIN index for array query acceleration)
+CREATE INDEX IF NOT EXISTS idx_watering_flows_sensors ON watering_flows USING gin (sensor_ids);
+CREATE INDEX IF NOT EXISTS idx_watering_schedules_pumps ON watering_schedules USING gin (pump_ids);
+CREATE INDEX IF NOT EXISTS idx_watering_schedules_flows ON watering_schedules USING gin (flow_ids);
+
+
+-- CASCADING DELETE TRIGGERS ON SQL ARRAYS
+-- 1. Automatically remove deleted sensors from watering_flows
+CREATE OR REPLACE FUNCTION cleanup_sensor_from_flows() RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE watering_flows
+    SET sensor_ids = array_remove(sensor_ids, OLD.id)
+    WHERE OLD.id = ANY(sensor_ids);
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_cleanup_sensor_from_flows ON sensor_configs;
+CREATE TRIGGER trg_cleanup_sensor_from_flows
+AFTER DELETE ON sensor_configs
+FOR EACH ROW EXECUTE FUNCTION cleanup_sensor_from_flows();
+
+
+-- 2. Automatically remove deleted pumps from watering_schedules
+CREATE OR REPLACE FUNCTION cleanup_pump_from_schedules() RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE watering_schedules
+    SET pump_ids = array_remove(pump_ids, OLD.id)
+    WHERE OLD.id = ANY(pump_ids);
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_cleanup_pump_from_schedules ON pump_configs;
+CREATE TRIGGER trg_cleanup_pump_from_schedules
+AFTER DELETE ON pump_configs
+FOR EACH ROW EXECUTE FUNCTION cleanup_pump_from_schedules();
+
+
+-- 3. Automatically remove deleted watering_flows from watering_schedules
+CREATE OR REPLACE FUNCTION cleanup_flow_from_schedules() RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE watering_schedules
+    SET flow_ids = array_remove(flow_ids, OLD.id)
+    WHERE OLD.id = ANY(flow_ids);
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_cleanup_flow_from_schedules ON watering_flows;
+CREATE TRIGGER trg_cleanup_flow_from_schedules
+AFTER DELETE ON watering_flows
+FOR EACH ROW EXECUTE FUNCTION cleanup_flow_from_schedules();
+
