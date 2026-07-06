@@ -43,6 +43,7 @@ async function runTests() {
   const testDayOfWeek = jsDay === 0 ? 7 : jsDay;
 
   let activeScheduleIds = [];
+  let originalMoistureThreshold = null;
 
   try {
     // Disable any pre-existing active schedules to avoid interfering with prediction assertions
@@ -53,6 +54,14 @@ async function runTests() {
     if (activeScheduleIds.length > 0) {
       console.log(`Temporarily disabling active schedules: ${activeScheduleIds.join(', ')}...`);
       await client.query("UPDATE watering_schedules SET enabled = false");
+    }
+
+    // Temporarily set moisture skip threshold to 100% to disable moisture skip checks during test
+    const thresholdRes = await client.query("SELECT value FROM system_config WHERE key = 'moisture_skip_threshold_percent'");
+    if (thresholdRes.rows.length > 0) {
+      originalMoistureThreshold = thresholdRes.rows[0].value;
+      console.log(`Temporarily setting moisture skip threshold to 100 (original: ${originalMoistureThreshold})...`);
+      await client.query("UPDATE system_config SET value = '100' WHERE key = 'moisture_skip_threshold_percent'");
     }
     // 1. Create a dynamic test schedule for tomorrow at 08:00 AM
     console.log('\n[Test 1] Creating a test schedule for tomorrow at 08:00...');
@@ -179,6 +188,12 @@ async function runTests() {
     if (activeScheduleIds.length > 0) {
       console.log(`Restoring active schedules: ${activeScheduleIds.join(', ')}...`);
       await client.query("UPDATE watering_schedules SET enabled = true WHERE id = ANY($1)", [activeScheduleIds]);
+    }
+
+    // Restore original moisture skip threshold
+    if (originalMoistureThreshold !== null) {
+      console.log(`Restoring moisture skip threshold to: ${originalMoistureThreshold}...`);
+      await client.query("UPDATE system_config SET value = $1 WHERE key = 'moisture_skip_threshold_percent'", [originalMoistureThreshold]);
     }
 
     console.log(`Clearing injected weather cache entry for: ${testDateStr}...`);

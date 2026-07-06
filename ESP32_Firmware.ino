@@ -9,8 +9,10 @@
 
 // --- Configuration & Host Constants ---
 // Setup default static connection parameters (updated on boot if dynamic config matches)
-const char* ssid     = "DIGI-56KC";
-const char* password = "CxuxFeduPx";
+const char* fallback_ssid     = "DIGI-56KC";
+const char* fallback_password = "CxuxFeduPx";
+String active_ssid = "";
+String active_password = "";
 const char* mqtt_server = "bcc1fdaf.ala.eu-central-1.emqxsl.com";
 const int mqtt_port = 8883;
 const char* mqtt_user = "WateringSystem_ESP32";
@@ -332,6 +334,24 @@ void fetchConfiguration() {
     
     if (doc["success"].as<bool>()) {
       Serial.println("Configuration fetched and loaded successfully.");
+
+      // Check for dynamic WiFi credentials updates
+      if (doc.containsKey("wifi_ssid") && doc.containsKey("wifi_password")) {
+        String newSsid = doc["wifi_ssid"].as<String>();
+        String newPass = doc["wifi_password"].as<String>();
+        
+        // If the credentials changed, trigger reboot with pending configuration
+        if (newSsid.length() > 0 && (newSsid != active_ssid || newPass != active_password)) {
+          Serial.printf("New WiFi configuration detected: %s. Saving pending and rebooting...\n", newSsid.c_str());
+          preferences.begin("irrigation", false);
+          preferences.putBool("has_pending", true);
+          preferences.putString("ssid_pending", newSsid);
+          preferences.putString("pass_pending", newPass);
+          preferences.end();
+          delay(1000);
+          ESP.restart();
+        }
+      }
 
       // 1. Update Telemetry Interval
       if (doc.containsKey("telemetry_interval_minutes")) {
@@ -676,10 +696,26 @@ void setup() {
   
   // Load local configs
   setupDefaultConfig();
+
+  // Load/verify WiFi configurations from Preferences
+  preferences.begin("irrigation", false);
+  bool hasPending = preferences.getBool("has_pending", false);
   
+  if (hasPending) {
+    active_ssid = preferences.getString("ssid_pending", fallback_ssid);
+    active_password = preferences.getString("pass_pending", fallback_password);
+    Serial.printf("Booting with pending WiFi: %s\n", active_ssid.c_str());
+  } else {
+    active_ssid = preferences.getString("wifi_ssid", fallback_ssid);
+    active_password = preferences.getString("wifi_pass", fallback_password);
+    Serial.printf("Booting with active WiFi: %s\n", active_ssid.c_str());
+  }
+  preferences.end();
+
   Serial.print("Connecting to WiFi: ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
+  Serial.println(active_ssid);
+  WiFi.begin(active_ssid.c_str(), active_password.c_str());
+  
   int attempt = 0;
   while (WiFi.status() != WL_CONNECTED && attempt < 20) { // Try for 10 seconds
     delay(500);
@@ -691,10 +727,53 @@ void setup() {
     Serial.println("\nWiFi network active.");
     Serial.print("IP Address: ");
     Serial.println(WiFi.localIP());
+    
+    if (hasPending) {
+      // Success: promote pending credentials to active
+      preferences.begin("irrigation", false);
+      preferences.putBool("has_pending", false);
+      preferences.putString("wifi_ssid", active_ssid);
+      preferences.putString("wifi_pass", active_password);
+      preferences.end();
+      Serial.println("Pending WiFi successfully promoted to active.");
+    } else {
+      // Confirm active credentials are saved
+      preferences.begin("irrigation", false);
+      preferences.putString("wifi_ssid", active_ssid);
+      preferences.putString("wifi_pass", active_password);
+      preferences.end();
+    }
+    
     // Dynamic configuration fetch from Next.js server on boot
     fetchConfiguration();
   } else {
-    Serial.println("\nWiFi connection timed out. Booting in offline mode.");
+    Serial.println("\nWiFi connection timed out.");
+    if (hasPending) {
+      // Failure: clear pending and rollback to previously working credentials
+      preferences.begin("irrigation", false);
+      preferences.putBool("has_pending", false);
+      active_ssid = preferences.getString("wifi_ssid", fallback_ssid);
+      active_password = preferences.getString("wifi_pass", fallback_password);
+      preferences.end();
+      Serial.printf("Rollback: re-trying previously active WiFi: %s\n", active_ssid.c_str());
+      
+      WiFi.disconnect();
+      WiFi.begin(active_ssid.c_str(), active_password.c_str());
+      attempt = 0;
+      while (WiFi.status() != WL_CONNECTED && attempt < 20) { // Try for 10 seconds
+        delay(500);
+        Serial.print(".");
+        attempt++;
+      }
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nWiFi successfully restored after rollback.");
+        fetchConfiguration();
+      } else {
+        Serial.println("\nWiFi rollback failed. Booting offline.");
+      }
+    } else {
+      Serial.println("Booting offline.");
+    }
   }
 
   // Load fallback schedules and time from flash if not fetched/synced
@@ -720,7 +799,7 @@ void reconnectNonBlocking() {
       lastWiFiCheck = now;
       Serial.println("WiFi connection lost. Attempting to reconnect...");
       WiFi.disconnect();
-      WiFi.begin(ssid, password);
+      WiFi.begin(active_ssid.c_str(), active_password.c_str());
     }
     return;
   }

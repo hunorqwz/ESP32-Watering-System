@@ -254,6 +254,10 @@ export async function GET() {
         
         // Check latest soil moisture if moisture sensors exist
         let moistureSummary = '';
+        let isMoistureSkip = false;
+        let moistureReason = '';
+        const moistureThreshold = configMap['moisture_skip_threshold_percent'] ? parseInt(configMap['moisture_skip_threshold_percent'], 10) : 70;
+
         const moistureSensors = sensors.filter(s => s.type === 'moisture');
         if (moistureSensors.length > 0) {
           let totalMoisture = 0;
@@ -279,22 +283,31 @@ export async function GET() {
           if (count > 0) {
             const avgMoisture = Math.round(totalMoisture / count);
             moistureSummary = `Average moisture: ${avgMoisture}%.`;
+            if (avgMoisture > moistureThreshold) {
+              isMoistureSkip = true;
+              moistureReason = `Soil moisture is high (${avgMoisture}%, threshold: ${moistureThreshold}%).`;
+            }
           }
         }
         
         const dateOptions = { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false };
         const timeLabel = absoluteNextTime.toLocaleDateString(undefined, dateOptions);
         
+        const isSkipped = willRain || isMoistureSkip;
+        const skipReason = willRain 
+          ? `Skip active: ${rainReason}` 
+          : isMoistureSkip 
+            ? `Skip active: ${moistureReason}`
+            : `Scheduled cycle. ${moistureSummary}`;
+
         nextWatering = {
           time: timeLabel,
           timestamp: absoluteNextTime.getTime(),
           pump_id: nextSchedule.pump_id,
           pump_name: nextSchedule.pump_name,
           duration_seconds: nextSchedule.duration_seconds,
-          skipped: willRain,
-          reason: willRain 
-            ? `Skip active: ${rainReason}` 
-            : `Scheduled cycle. ${moistureSummary}`,
+          skipped: isSkipped,
+          reason: skipReason,
           details: `Runs for ${nextSchedule.duration_seconds}s.`
         };
       }
