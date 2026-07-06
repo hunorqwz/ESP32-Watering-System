@@ -17,6 +17,27 @@ export async function GET(request) {
   try {
     const sql = getDb();
 
+    // Auto-update wifi_ssid in database if reported by device via HTTP header
+    const deviceSsid = request.headers.get('X-Device-SSID');
+    if (deviceSsid) {
+      try {
+        const currentConfig = await sql`
+          SELECT value FROM system_config WHERE key = 'wifi_ssid' LIMIT 1
+        `;
+        const currentSsid = currentConfig.length > 0 ? currentConfig[0].value : '';
+        if (currentSsid !== deviceSsid) {
+          await sql`
+            INSERT INTO system_config (key, value, updated_at)
+            VALUES ('wifi_ssid', ${deviceSsid}, CURRENT_TIMESTAMP)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP
+          `;
+          console.log(`Auto-updated wifi_ssid key to match online device: "${deviceSsid}"`);
+        }
+      } catch (dbErr) {
+        console.error('Failed to auto-update wifi_ssid config:', dbErr.message);
+      }
+    }
+
     // Fetch WiFi settings, interval, sensor configurations, pump configurations, active schedules, and flows
     const [configs, sensors, pumps, schedules, flows] = await Promise.all([
       sql`

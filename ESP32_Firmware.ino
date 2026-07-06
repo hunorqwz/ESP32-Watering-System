@@ -325,6 +325,7 @@ void fetchConfiguration() {
   
   // Send authorization token to proof device identity
   http.addHeader("Authorization", String("Bearer ") + api_access_token);
+  http.addHeader("X-Device-SSID", active_ssid);
   
   int httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
