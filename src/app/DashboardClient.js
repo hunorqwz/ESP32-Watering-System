@@ -1942,6 +1942,23 @@ export default function Dashboard({ apiToken }) {
                         Save WiFi Settings
                       </button>
                     </div>
+
+                    {/* Offline Provisioning Help Card */}
+                    <div className="mt-6 border border-zinc-100 bg-zinc-50/50 rounded-xl p-4.5 space-y-2.5">
+                      <div className="flex items-center gap-2 text-zinc-800">
+                        <Wifi className="w-4 h-4 text-blue-500" />
+                        <h5 className="text-[11px] font-bold uppercase tracking-wider">Offline Setup & Relocation</h5>
+                      </div>
+                      <p className="text-[11px] text-zinc-600 leading-relaxed">
+                        If you move the device to a new location or change your home network password, the ESP32 will not be able to reach this panel. Follow these steps to connect:
+                      </p>
+                      <ol className="text-[11px] text-zinc-600 list-decimal pl-4.5 space-y-1.5 leading-relaxed">
+                        <li>The ESP32 will automatically launch a configuration hotspot named <strong className="text-zinc-900 font-semibold">Watering-System-Setup</strong> after failing to connect for 10 seconds.</li>
+                        <li>Connect your phone, tablet, or laptop to that hotspot.</li>
+                        <li>Open your browser and navigate to <strong className="text-zinc-900 font-semibold">http://192.168.4.1</strong> to open the setup portal.</li>
+                        <li>Select your new local Wi-Fi network from the list, type your password, confirm the Next.js server URL, and save.</li>
+                      </ol>
+                    </div>
                   </div>
                 )}
 

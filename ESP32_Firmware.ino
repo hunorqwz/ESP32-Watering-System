@@ -6,6 +6,8 @@
 #include <HTTPClient.h>
 #include <time.h>
 #include <Preferences.h>
+#include <WebServer.h>
+#include <DNSServer.h>
 
 // --- Configuration & Host Constants ---
 // Setup default static connection parameters (updated on boot if dynamic config matches)
@@ -22,7 +24,8 @@ const char* mqtt_pass = "tdsHU$TkT2UwE9L7S6M&";
 const char* api_access_token = "8a6c03267e3b603d90ddb23c2ae6917102c807eec6d38554";
 
 // The Next.js API server host URL
-const char* http_server = "http://192.168.1.135:3000"; // REPLACE with your active Next.js server local IP/domain
+const char* fallback_http_server = "http://192.168.1.135:3000"; // REPLACE with your active Next.js server local IP/domain
+String active_http_server = "";
 
 // --- Hardware Pins (Dynamic Fallbacks) ---
 int pin_trig = 14; // Default trigger pin for water level sensor
@@ -30,6 +33,8 @@ int pin_echo = 27; // Default echo pin for water level sensor (can be remapped d
 int pin_dht  = 13; // Default DHT data pin (can be remapped dynamically)
 
 #define DHTTYPE DHT11
+#define RELAY_ON LOW
+#define RELAY_OFF HIGH
 DHT* dht = nullptr; // Instantiated dynamically based on configured pins
 
 // --- Dynamic Models ---
@@ -180,24 +185,27 @@ bool checkReservoirSafety() {
   for (int i = 0; i < sensorCount; i++) {
     if (strcmp(sensors[i].type, "water_level") == 0) {
       float dist = getWaterLevel();
-      if (dist > 0) {
-        int dry = sensors[i].dryLimit;
-        int wet = sensors[i].wetLimit;
-        int height = dry - wet;
-        float waterHeight = (float)dry - dist;
-        if (waterHeight < 0) waterHeight = 0;
-        
-        float pct = 0;
-        if (height > 0) {
-          pct = (waterHeight / (float)height) * 100.0;
-        } else {
-          pct = 100.0;
-        }
-        
-        if (pct < 10.0) {
-          Serial.printf("Local Safety Lockout: Reservoir water level too low (%.1f%%, distance: %.1f cm). Blocking pump.\n", pct, dist);
-          return false;
-        }
+      if (dist <= 0) {
+        Serial.println("Local Safety Alert: Reservoir water level sensor failed or disconnected! Blocking pump for safety.");
+        return false;
+      }
+      
+      int dry = sensors[i].dryLimit;
+      int wet = sensors[i].wetLimit;
+      int height = dry - wet;
+      float waterHeight = (float)dry - dist;
+      if (waterHeight < 0) waterHeight = 0;
+      
+      float pct = 0;
+      if (height > 0) {
+        pct = (waterHeight / (float)height) * 100.0;
+      } else {
+        pct = 100.0;
+      }
+      
+      if (pct < 10.0) {
+        Serial.printf("Local Safety Lockout: Reservoir water level too low (%.1f%%, distance: %.1f cm). Blocking pump.\n", pct, dist);
+        return false;
       }
       break;
     }
@@ -263,7 +271,7 @@ void setupDefaultConfig() {
     pumps[i].hasScheduleTimer = false;
     
     pinMode(pumps[i].pin, OUTPUT);
-    digitalWrite(pumps[i].pin, HIGH); // Set high (Off state for typical active-low relay)
+    digitalWrite(pumps[i].pin, RELAY_OFF); // Set to default off state
   }
 }
 
@@ -300,7 +308,7 @@ void fetchConfiguration() {
   
   HTTPClient http;
   char configUrl[128];
-  snprintf(configUrl, sizeof(configUrl), "%s/api/device/config", http_server);
+  snprintf(configUrl, sizeof(configUrl), "%s/api/device/config", active_http_server.c_str());
   
   Serial.printf("Fetching configurations from: %s\n", configUrl);
   
@@ -308,7 +316,7 @@ void fetchConfiguration() {
   WiFiClientSecure secureClient;
   WiFiClient plainClient;
   
-  if (strncmp(http_server, "https", 5) == 0) {
+  if (strncmp(active_http_server.c_str(), "https", 5) == 0) {
     secureClient.setCACert(ca_cert);
     http.begin(secureClient, configUrl);
   } else {
@@ -447,7 +455,7 @@ void fetchConfiguration() {
           pinMode(pumps[pumpCount].pin, OUTPUT);
           // Only change physical relay if it is not currently run by a local timer
           if (!pumps[pumpCount].hasScheduleTimer) {
-            digitalWrite(pumps[pumpCount].pin, pumps[pumpCount].state ? LOW : HIGH);
+            digitalWrite(pumps[pumpCount].pin, pumps[pumpCount].state ? RELAY_ON : RELAY_OFF);
           }
           
           Serial.printf("  -> Mapped Output [%d]: %s (Pin: %d, State: %s)\n", 
@@ -571,7 +579,7 @@ float getWaterLevel() {
   digitalWrite(pin_trig, HIGH);
   delayMicroseconds(10);
   digitalWrite(pin_trig, LOW);
-  long duration = pulseIn(pin_echo, HIGH, 30000); 
+  long duration = pulseIn(pin_echo, HIGH, 11600); 
   if (duration == 0) return 0;
   return (duration * 0.034 / 2); 
 }
@@ -643,7 +651,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
             Serial.printf("Output toggle rejected: Pump ID %d safety lockout active.\n", pumpId);
             return;
           }
-          digitalWrite(pumps[i].pin, state ? LOW : HIGH);
+          digitalWrite(pumps[i].pin, state ? RELAY_ON : RELAY_OFF);
           pumps[i].state = state;
           
           // Clear any active local scheduled timer on manual override
@@ -688,6 +696,403 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
+// --- Dynamic Wi-Fi and Server Setup Captive Portal ---
+void startCaptivePortal() {
+  Serial.println("\n=== Starting Wi-Fi & Server Setup Captive Portal ===");
+  
+  // 1. Scan for nearby networks in STA mode before launching AP
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+  Serial.println("Scanning nearby Wi-Fi networks...");
+  int n = WiFi.scanNetworks();
+  String ssidOptions = "";
+  if (n <= 0) {
+    Serial.println("No networks found.");
+    ssidOptions = "<option value=\"\">No networks found. Enter manually.</option>";
+  } else {
+    Serial.printf("Scanned %d Wi-Fi networks.\n", n);
+    for (int i = 0; i < n; ++i) {
+      String ssid = WiFi.SSID(i);
+      if (ssid.length() > 0) {
+        // Render SSID options with signal strength indicator and padlock emoji for secured networks
+        String signal = String(WiFi.RSSI(i)) + " dBm";
+        bool secured = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+        ssidOptions += "<option value=\"" + ssid + "\">" + ssid + " (" + signal + ")" + (secured ? " 🔒" : "") + "</option>";
+      }
+    }
+  }
+  WiFi.scanDelete(); // Free scan results memory
+  
+  // 2. Start Access Point
+  WiFi.mode(WIFI_AP);
+  IPAddress apIP(192, 168, 4, 1);
+  IPAddress subnet(255, 255, 255, 0);
+  WiFi.softAPConfig(apIP, apIP, subnet);
+  
+  if (!WiFi.softAP("Watering-System-Setup")) {
+    Serial.println("Error: Failed to start SoftAP.");
+    return;
+  }
+  
+  Serial.print("Access Point active. SSID: Watering-System-Setup. IP: ");
+  Serial.println(WiFi.softAPIP());
+  
+  DNSServer dns;
+  dns.start(53, "*", apIP);
+  
+  WebServer server(80);
+  
+  // Serve dynamic configuration HTML portal
+  server.on("/", HTTP_GET, [&server, ssidOptions]() {
+    String html = R"HTML(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Irrigation Node Setup</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: rgba(22, 28, 45, 0.9);
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --primary: #3b82f6;
+      --primary-glow: rgba(59, 130, 246, 0.5);
+      --border: #1f2937;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(circle at center, #111827 0%, #030712 100%);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+    .container {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px 24px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(8px);
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .logo {
+      display: inline-flex;
+      width: 48px;
+      height: 48px;
+      background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+      border-radius: 12px;
+      margin-bottom: 16px;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 15px var(--primary-glow);
+    }
+    .logo svg {
+      width: 24px;
+      height: 24px;
+      fill: none;
+      stroke: white;
+      stroke-width: 2;
+    }
+    h2 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+    }
+    p {
+      color: var(--text-muted);
+      font-size: 13px;
+      margin: 6px 0 0 0;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+      color: var(--text-muted);
+    }
+    select, input {
+      width: 100%;
+      padding: 12px 14px;
+      background-color: rgba(3, 7, 18, 0.5);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 14px;
+      box-sizing: border-box;
+      transition: all 0.2s;
+    }
+    select {
+      appearance: none;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+      background-size: 16px;
+    }
+    select:focus, input:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--primary-glow);
+      background-color: rgba(3, 7, 18, 0.8);
+    }
+    option {
+      background-color: var(--bg);
+      color: var(--text);
+    }
+    button {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+      border: none;
+      border-radius: 8px;
+      color: #ffffff;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-top: 8px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+    button:hover {
+      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+      transform: translateY(-1px);
+    }
+    button:active {
+      transform: translateY(0);
+    }
+    .footer {
+      text-align: center;
+      margin-top: 24px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+  </style>
+  <script>
+    function toggleSSIDInput() {
+      var select = document.getElementById("ssid");
+      var manualGroup = document.getElementById("manual_ssid_group");
+      var manualInput = document.getElementById("manual_ssid");
+      if (select.value === "__manual__") {
+        manualGroup.style.display = "block";
+        manualInput.required = true;
+      } else {
+        manualGroup.style.display = "none";
+        manualInput.required = false;
+        manualInput.value = "";
+      }
+    }
+  </script>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">
+        <svg viewBox="0 0 24 24">
+          <path d="M12 2L2 22h20L12 2zm0 3.99L19.53 19H4.47L12 5.99zM11 11h2v4h-2zm0 6h2v2h-2z" />
+        </svg>
+      </div>
+      <h2>Terrace Irrigation Node</h2>
+      <p>Provision Wi-Fi & Next.js Server Credentials</p>
+    </div>
+    <form action="/save" method="POST">
+      <div class="form-group">
+        <label for="ssid">Select Wi-Fi Network</label>
+        <select id="ssid" name="ssid" onchange="toggleSSIDInput()" required>
+          #SSID_OPTIONS#
+          <option value="__manual__">-- Enter SSID manually --</option>
+        </select>
+      </div>
+      <div class="form-group" id="manual_ssid_group" style="display: none;">
+        <label for="manual_ssid">Manual Network Name (SSID)</label>
+        <input type="text" id="manual_ssid" name="manual_ssid" placeholder="Enter Wi-Fi network name">
+      </div>
+      <div class="form-group">
+        <label for="password">Wi-Fi Password</label>
+        <input type="password" id="password" name="password" placeholder="Enter Wi-Fi password (optional)">
+      </div>
+      <div class="form-group">
+        <label for="server_url">Next.js Server API URL</label>
+        <input type="text" id="server_url" name="server_url" required value="#SERVER_URL#">
+      </div>
+      <button type="submit">Save & Restart Device</button>
+    </form>
+    <div class="footer">
+      Device will continue offline if setup is idle for 5 minutes.
+    </div>
+  </div>
+</body>
+</html>
+)HTML";
+    html.replace("#SSID_OPTIONS#", ssidOptions);
+    html.replace("#SERVER_URL#", active_http_server);
+    server.send(200, "text/html", html);
+  });
+  
+  // Save credentials to Preferences and restart
+  server.on("/save", HTTP_POST, [&server]() {
+    String ssid = server.arg("ssid");
+    String manualSsid = server.arg("manual_ssid");
+    String password = server.arg("password");
+    String serverUrl = server.arg("server_url");
+    
+    Serial.println("Captive Portal: Received provisioning request.");
+    
+    if (ssid == "__manual__") {
+      ssid = manualSsid;
+    }
+    
+    if (ssid.length() > 0 && serverUrl.length() > 0) {
+      preferences.begin("irrigation", false);
+      preferences.putString("wifi_ssid", ssid);
+      preferences.putString("wifi_pass", password);
+      preferences.putString("http_server", serverUrl);
+      preferences.putBool("has_pending", false);
+      preferences.end();
+      
+      String response = R"HTML(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Configuration Saved</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: rgba(22, 28, 45, 0.9);
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --success: #10b981;
+      --border: #1f2937;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(circle at center, #111827 0%, #030712 100%);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 16px;
+      box-sizing: border-box;
+      text-align: center;
+    }
+    .container {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px 24px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(8px);
+    }
+    .icon {
+      display: inline-flex;
+      width: 56px;
+      height: 56px;
+      background-color: rgba(16, 185, 129, 0.1);
+      border-radius: 50%;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+      border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+    .icon svg {
+      width: 28px;
+      height: 28px;
+      fill: none;
+      stroke: var(--success);
+      stroke-width: 2.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    h2 {
+      margin: 0 0 10px 0;
+      font-size: 22px;
+      font-weight: 700;
+    }
+    p {
+      color: var(--text-muted);
+      font-size: 14px;
+      line-height: 1.5;
+      margin: 0 0 16px 0;
+    }
+    .highlight {
+      color: var(--text);
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">
+      <svg viewBox="0 0 24 24">
+        <polyline points="20 6 9 17 4 12" />
+      </svg>
+    </div>
+    <h2>Settings Saved!</h2>
+    <p>The ESP32 is rebooting now to connect to <span class="highlight">)HTML" + ssid + R"HTML(</span>.</p>
+    <p>Please disconnect from the setup hotspot and reconnect your device to your home network.</p>
+  </div>
+</body>
+</html>
+)HTML";
+      server.send(200, "text/html", response);
+      delay(2000);
+      ESP.restart();
+    } else {
+      server.send(400, "text/plain", "Bad Request: SSID and Server URL are required.");
+    }
+  });
+  
+  // Captive Portal Redirect
+  server.onNotFound([&server]() {
+    server.sendHeader("Location", "http://192.168.4.1/", true);
+    server.send(302, "text/plain", "");
+  });
+  
+  server.begin();
+  
+  unsigned long startMs = millis();
+  const unsigned long portalTimeoutMs = 300000; // 5 minutes
+  
+  while (millis() - startMs < portalTimeoutMs) {
+    dns.processNextRequest();
+    server.handleClient();
+    delay(10);
+  }
+  
+  Serial.println("Captive Portal timeout. Continuing boot in offline mode...");
+  
+  // Graceful cleanup
+  server.stop();
+  dns.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  // Re-establish connection attempt in background using current active configs
+  WiFi.begin(active_ssid.c_str(), active_password.c_str());
+}
+
 // --- Arduino Lifecycle Hook ---
 void setup() {
   Serial.begin(115200); // 115200 Baud rate
@@ -710,6 +1115,11 @@ void setup() {
     active_password = preferences.getString("wifi_pass", fallback_password);
     Serial.printf("Booting with active WiFi: %s\n", active_ssid.c_str());
   }
+  active_http_server = preferences.getString("http_server", fallback_http_server);
+  if (active_http_server.length() == 0) {
+    active_http_server = fallback_http_server;
+  }
+  Serial.printf("Active HTTP Server: %s\n", active_http_server.c_str());
   preferences.end();
 
   Serial.print("Connecting to WiFi: ");
@@ -748,6 +1158,8 @@ void setup() {
     fetchConfiguration();
   } else {
     Serial.println("\nWiFi connection timed out.");
+    bool connected = false;
+    
     if (hasPending) {
       // Failure: clear pending and rollback to previously working credentials
       preferences.begin("irrigation", false);
@@ -768,10 +1180,13 @@ void setup() {
       if (WiFi.status() == WL_CONNECTED) {
         Serial.println("\nWiFi successfully restored after rollback.");
         fetchConfiguration();
+        connected = true;
       } else {
-        Serial.println("\nWiFi rollback failed. Booting offline.");
+        Serial.println("\nWiFi rollback failed.");
       }
-    } else if (active_ssid != fallback_ssid) {
+    }
+    
+    if (!connected && active_ssid != fallback_ssid) {
       // Try connecting to fallback compile-time WiFi credentials as a secondary backup
       Serial.printf("Trying fallback WiFi: %s\n", fallback_ssid);
       WiFi.disconnect();
@@ -793,11 +1208,15 @@ void setup() {
         preferences.end();
         
         fetchConfiguration();
+        connected = true;
       } else {
-        Serial.println("\nFallback WiFi connection failed. Booting offline.");
+        Serial.println("\nFallback WiFi connection failed.");
       }
-    } else {
-      Serial.println("Booting offline.");
+    }
+    
+    if (!connected) {
+      Serial.println("Could not establish a connection to any Wi-Fi networks. Launching setup portal...");
+      startCaptivePortal();
     }
   }
 
@@ -869,7 +1288,7 @@ void triggerScheduleCycle(LocalSchedule& s) {
     int targetPumpId = s.pumpIds[pIdx];
     for (int p = 0; p < pumpCount; p++) {
       if (pumps[p].id == targetPumpId) {
-        digitalWrite(pumps[p].pin, LOW); // ON
+        digitalWrite(pumps[p].pin, RELAY_ON); // ON
         pumps[p].state = 1;
         pumps[p].turnedOnAt = millis();
         pumps[p].scheduleDurationMs = (unsigned long)s.durationSeconds * 1000;
@@ -887,7 +1306,7 @@ void triggerScheduleCycle(LocalSchedule& s) {
         int pumpId = flows[f].pumpId;
         for (int p = 0; p < pumpCount; p++) {
           if (pumps[p].id == pumpId) {
-            digitalWrite(pumps[p].pin, LOW); // ON
+            digitalWrite(pumps[p].pin, RELAY_ON); // ON
             pumps[p].state = 1;
             pumps[p].turnedOnAt = millis();
             pumps[p].scheduleDurationMs = (unsigned long)s.durationSeconds * 1000;
@@ -990,7 +1409,7 @@ void manageWatchdogs() {
       // 1. Local schedule duration cutoff (rollover-proof)
       if (pumps[i].hasScheduleTimer && (now - pumps[i].turnedOnAt >= pumps[i].scheduleDurationMs)) {
         Serial.printf("Local schedule duration complete: Shutting down Pump [%d]\n", pumps[i].id);
-        digitalWrite(pumps[i].pin, HIGH); // Turn relay OFF
+        digitalWrite(pumps[i].pin, RELAY_OFF); // Turn relay OFF
         pumps[i].state = 0;
         pumps[i].hasScheduleTimer = false;
         sendTelemetry();
@@ -1000,7 +1419,7 @@ void manageWatchdogs() {
         unsigned long elapsed = now - pumps[i].turnedOnAt;
         if (elapsed >= (pumpSafetyTimeout * 1000)) {
           Serial.printf("Safety Watchdog Alert: Pump [%d] exceeded maximum continuous run limit! Shutting down.\n", pumps[i].id);
-          digitalWrite(pumps[i].pin, HIGH); // Turn relay OFF
+          digitalWrite(pumps[i].pin, RELAY_OFF); // Turn relay OFF
           pumps[i].state = 0;
           pumps[i].hasScheduleTimer = false;
           sendTelemetry();
