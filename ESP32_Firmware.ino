@@ -22,9 +22,10 @@ const char* mqtt_pass = "tdsHU$TkT2UwE9L7S6M&";
 
 // API security token to authenticate the ESP32 with your server
 const char* api_access_token = "8a6c03267e3b603d90ddb23c2ae6917102c807eec6d38554";
+String active_api_token = "";
 
 // The Next.js API server host URL
-const char* fallback_http_server = "http://192.168.1.135:3000"; // REPLACE with your active Next.js server local IP/domain
+const char* fallback_http_server = "https://esp-32-watering-system.vercel.app";
 String active_http_server = "";
 
 // --- Hardware Pins (Dynamic Fallbacks) ---
@@ -300,6 +301,246 @@ void syncTime() {
 }
 
 // --- HTTP Configuration Ingestion ---
+bool parseConfigPayload(String payload) {
+  // Dynamic allocation to support scaling schedule configurations cleanly on heap
+  DynamicJsonDocument doc(8192);
+  DeserializationError error = deserializeJson(doc, payload);
+  
+  if (error) {
+    Serial.printf("Failed to parse server config payload: %s\n", error.c_str());
+    return false;
+  }
+  
+  if (doc["success"].as<bool>()) {
+    Serial.println("Configuration fetched and loaded successfully.");
+
+    // Check for dynamic WiFi credentials updates
+    if (doc.containsKey("wifi_ssid") && doc.containsKey("wifi_password")) {
+      String newSsid = doc["wifi_ssid"].as<String>();
+      String newPass = doc["wifi_password"].as<String>();
+      
+      // If the credentials changed, trigger reboot with pending configuration
+      if (newSsid.length() > 0 && (newSsid != active_ssid || newPass != active_password)) {
+        Serial.printf("New WiFi configuration detected: %s. Saving pending and rebooting...\n", newSsid.c_str());
+        preferences.begin("irrigation", false);
+        preferences.putBool("has_pending", true);
+        preferences.putString("ssid_pending", newSsid);
+        preferences.putString("pass_pending", newPass);
+        preferences.end();
+        delay(1000);
+        ESP.restart();
+      }
+    }
+
+    // 1. Update Telemetry Interval
+    if (doc.containsKey("telemetry_interval_minutes")) {
+      int intervalMins = doc["telemetry_interval_minutes"].as<int>();
+      telemetryInterval = (unsigned long)intervalMins * 60 * 1000;
+      Serial.printf("Dynamic Sleep interval set to: %lu ms\n", telemetryInterval);
+    }
+
+    // 2. Fetch safety watchdog timeout limit
+    if (doc.containsKey("pump_safety_timeout_seconds")) {
+      pumpSafetyTimeout = doc["pump_safety_timeout_seconds"].as<unsigned long>();
+      Serial.printf("Safety watchdog maximum timeout set to: %lu seconds\n", pumpSafetyTimeout);
+    }
+
+    // 3. Fetch timezone offset & sync time
+    if (doc.containsKey("timezone_offset_seconds")) {
+      long newOffset = doc["timezone_offset_seconds"].as<long>();
+      if (newOffset != timezoneOffsetSeconds || !timeSynced) {
+        timezoneOffsetSeconds = newOffset;
+        syncTime();
+      }
+    }
+    
+    // 4. Map Dynamic Sensors
+    if (doc.containsKey("sensors")) {
+      JsonArray sensorArr = doc["sensors"].as<JsonArray>();
+      sensorCount = 0;
+      int newDhtPin = -1;
+      
+      for (JsonVariant value : sensorArr) {
+        if (sensorCount >= 10) break;
+        JsonObject sensorObj = value.as<JsonObject>();
+        if (sensorObj.isNull()) continue;
+        
+        sensors[sensorCount].id = sensorObj["id"].as<int>();
+        const char* nameStr = sensorObj["name"].as<const char*>();
+        strncpy(sensors[sensorCount].name, nameStr ? nameStr : "Unnamed Sensor", sizeof(sensors[sensorCount].name) - 1);
+        sensors[sensorCount].name[sizeof(sensors[sensorCount].name) - 1] = '\0';
+        
+        const char* typeStr = sensorObj["type"].as<const char*>();
+        strncpy(sensors[sensorCount].type, typeStr ? typeStr : "unknown", sizeof(sensors[sensorCount].type) - 1);
+        sensors[sensorCount].type[sizeof(sensors[sensorCount].type) - 1] = '\0';
+        
+        sensors[sensorCount].pin = sensorObj["pin"].as<int>();
+        
+        sensors[sensorCount].dryLimit = sensorObj.containsKey("dry_limit") && !sensorObj["dry_limit"].isNull() ? sensorObj["dry_limit"].as<int>() : 3400;
+        sensors[sensorCount].wetLimit = sensorObj.containsKey("wet_limit") && !sensorObj["wet_limit"].isNull() ? sensorObj["wet_limit"].as<int>() : 1100;
+        
+        // Re-init PIN modes
+        if (strcmp(sensors[sensorCount].type, "temperature") == 0 || strcmp(sensors[sensorCount].type, "humidity") == 0) {
+          newDhtPin = sensors[sensorCount].pin;
+        } else if (strcmp(sensors[sensorCount].type, "water_level") == 0) {
+          pin_echo = sensors[sensorCount].pin;
+          pinMode(pin_echo, INPUT);
+          pinMode(pin_trig, OUTPUT);
+        } else {
+          pinMode(sensors[sensorCount].pin, INPUT);
+        }
+        
+        Serial.printf("  -> Mapped Sensor [%d]: %s (Type: %s, Pin: %d)\n", 
+                      sensors[sensorCount].id, sensors[sensorCount].name, sensors[sensorCount].type, sensors[sensorCount].pin);
+        sensorCount++;
+      }
+      
+      // Handle DHT pin changes
+      if (newDhtPin != -1 && newDhtPin != pin_dht) {
+        pin_dht = newDhtPin;
+        if (dht != nullptr) delete dht;
+        dht = new DHT(pin_dht, DHTTYPE);
+        dht->begin();
+        Serial.printf("DHT data pin moved dynamically to pin: %d\n", pin_dht);
+      }
+    }
+    
+    // 5. Map Dynamic Pumps
+    if (doc.containsKey("pumps")) {
+      JsonArray pumpArr = doc["pumps"].as<JsonArray>();
+      pumpCount = 0;
+      
+      for (JsonVariant value : pumpArr) {
+        if (pumpCount >= 10) break;
+        JsonObject pumpObj = value.as<JsonObject>();
+        if (pumpObj.isNull()) continue;
+        
+        pumps[pumpCount].id = pumpObj["id"].as<int>();
+        const char* pNameStr = pumpObj["name"].as<const char*>();
+        strncpy(pumps[pumpCount].name, pNameStr ? pNameStr : "Unnamed Pump", sizeof(pumps[pumpCount].name) - 1);
+        pumps[pumpCount].name[sizeof(pumps[pumpCount].name) - 1] = '\0';
+        
+        pumps[pumpCount].pin = pumpObj["pin"].as<int>();
+        pumps[pumpCount].state = pumpObj.containsKey("state") ? pumpObj["state"].as<int>() : 0;
+        
+        pinMode(pumps[pumpCount].pin, OUTPUT);
+        // Only change physical relay if it is not currently run by a local timer
+        if (!pumps[pumpCount].hasScheduleTimer) {
+          digitalWrite(pumps[pumpCount].pin, pumps[pumpCount].state ? RELAY_ON : RELAY_OFF);
+        }
+        
+        Serial.printf("  -> Mapped Output [%d]: %s (Pin: %d, State: %s)\n", 
+                      pumps[pumpCount].id, pumps[pumpCount].name, pumps[pumpCount].pin, pumps[pumpCount].state ? "ON" : "OFF");
+        pumpCount++;
+      }
+    }
+    
+    // 5b. Map Dynamic Watering Flows
+    if (doc.containsKey("flows")) {
+      JsonArray flowArr = doc["flows"].as<JsonArray>();
+      flowCount = 0;
+      Serial.println("Loading dynamic flows (zones) into local memory...");
+      
+      for (JsonVariant value : flowArr) {
+        if (flowCount >= 10) break;
+        JsonObject flowObj = value.as<JsonObject>();
+        if (flowObj.isNull()) continue;
+        
+        flows[flowCount].id = flowObj["id"].as<int>();
+        const char* fNameStr = flowObj["name"].as<const char*>();
+        strncpy(flows[flowCount].name, fNameStr ? fNameStr : "Unnamed Flow", sizeof(flows[flowCount].name) - 1);
+        flows[flowCount].name[sizeof(flows[flowCount].name) - 1] = '\0';
+        
+        flows[flowCount].pumpId = flowObj["pump_id"].as<int>();
+        
+        JsonArray sensorList = flowObj["sensor_ids"].as<JsonArray>();
+        flows[flowCount].sensorCount = 0;
+        for (JsonVariant sVal : sensorList) {
+          if (flows[flowCount].sensorCount >= 10) break;
+          flows[flowCount].sensorIds[flows[flowCount].sensorCount++] = sVal.as<int>();
+        }
+        
+        Serial.printf("  -> Mapped Flow [%d]: %s (Pump ID: %d, Sensors count: %d)\n",
+                      flows[flowCount].id, flows[flowCount].name, flows[flowCount].pumpId, flows[flowCount].sensorCount);
+        flowCount++;
+      }
+    }
+
+    // 6. Map Offline Local Schedules
+    if (doc.containsKey("schedules")) {
+      JsonArray schedArr = doc["schedules"].as<JsonArray>();
+      scheduleCount = 0;
+      Serial.println("Loading offline schedules into local memory...");
+
+      for (JsonVariant value : schedArr) {
+        if (scheduleCount >= 10) break;
+        JsonObject schedObj = value.as<JsonObject>();
+        if (schedObj.isNull()) continue;
+
+        LocalSchedule& s = schedules[scheduleCount];
+        s.id = schedObj["id"].as<int>();
+        s.durationSeconds = schedObj["duration_seconds"].as<int>();
+
+        // Parse time string e.g. "08:00:00" -> hour: 8, minute: 0
+        const char* timeStr = schedObj["time_of_day"].as<const char*>();
+        int hr = 0, mn = 0;
+        if (timeStr) {
+          sscanf(timeStr, "%d:%d", &hr, &mn);
+        }
+        s.hour = hr;
+        s.minute = mn;
+
+        // Map targeted pump IDs (direct/legacy)
+        s.pumpCount = 0;
+        if (schedObj.containsKey("pump_ids") && !schedObj["pump_ids"].isNull()) {
+          JsonArray pumpsList = schedObj["pump_ids"].as<JsonArray>();
+          for (JsonVariant pVal : pumpsList) {
+            if (s.pumpCount >= 5) break;
+            s.pumpIds[s.pumpCount++] = pVal.as<int>();
+          }
+        }
+
+        // Map targeted flow IDs
+        s.flowCount = 0;
+        if (schedObj.containsKey("flow_ids") && !schedObj["flow_ids"].isNull()) {
+          JsonArray flowsList = schedObj["flow_ids"].as<JsonArray>();
+          for (JsonVariant fVal : flowsList) {
+            if (s.flowCount >= 5) break;
+            s.flowIds[s.flowCount++] = fVal.as<int>();
+          }
+        }
+
+        s.cycles = schedObj.containsKey("cycles") ? schedObj["cycles"].as<int>() : 1;
+        s.soakDurationSeconds = schedObj.containsKey("soak_duration_seconds") ? schedObj["soak_duration_seconds"].as<int>() : 0;
+
+        // Initialize runtime state
+        s.isPulseActive = false;
+        s.isSoaking = false;
+        s.currentCycle = 0;
+        s.lastPhaseTimestamp = 0;
+
+        // Map weekdays
+        JsonArray daysList = schedObj["days_of_week"].as<JsonArray>();
+        s.dayCount = 0;
+        for (JsonVariant dVal : daysList) {
+          if (s.dayCount >= 7) break;
+          s.daysOfWeek[s.dayCount++] = dVal.as<int>();
+        }
+
+        Serial.printf("  -> Schedule [%d] loaded: daily at %02d:%02d for %ds (Pumps: %d, Flows: %d, Cycles: %d, Soak: %ds)\n",
+                      s.id, s.hour, s.minute, s.durationSeconds, s.pumpCount, s.flowCount, s.cycles, s.soakDurationSeconds);
+        scheduleCount++;
+      }
+    }
+    // Save schedules to flash memory after parsing successfully
+    saveSchedulesToFlash();
+    return true;
+  } else {
+    Serial.printf("Server rejected config request: %s\n", doc["error"].as<const char*>());
+    return false;
+  }
+}
+
 void fetchConfiguration() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Cannot sync configs: WiFi is offline.");
@@ -312,7 +553,6 @@ void fetchConfiguration() {
   
   Serial.printf("Fetching configurations from: %s\n", configUrl);
   
-  // Declaring clients at function scope keeps them alive during http.GET()
   WiFiClientSecure secureClient;
   WiFiClient plainClient;
   
@@ -324,253 +564,50 @@ void fetchConfiguration() {
   }
   
   // Send authorization token to proof device identity
-  http.addHeader("Authorization", String("Bearer ") + api_access_token);
+  http.addHeader("Authorization", String("Bearer ") + (active_api_token.length() > 0 ? active_api_token : api_access_token));
   http.addHeader("X-Device-SSID", active_ssid);
   
   int httpCode = http.GET();
+  bool success = false;
+  
   if (httpCode == HTTP_CODE_OK) {
     String payload = http.getString();
-    
-    // Dynamic allocation to support scaling schedule configurations cleanly on heap
-    DynamicJsonDocument doc(8192);
-    DeserializationError error = deserializeJson(doc, payload);
-    
-    if (error) {
-      Serial.printf("Failed to parse server config payload: %s\n", error.c_str());
-      http.end();
-      return;
-    }
-    
-    if (doc["success"].as<bool>()) {
-      Serial.println("Configuration fetched and loaded successfully.");
-
-      // Check for dynamic WiFi credentials updates
-      if (doc.containsKey("wifi_ssid") && doc.containsKey("wifi_password")) {
-        String newSsid = doc["wifi_ssid"].as<String>();
-        String newPass = doc["wifi_password"].as<String>();
-        
-        // If the credentials changed, trigger reboot with pending configuration
-        if (newSsid.length() > 0 && (newSsid != active_ssid || newPass != active_password)) {
-          Serial.printf("New WiFi configuration detected: %s. Saving pending and rebooting...\n", newSsid.c_str());
-          preferences.begin("irrigation", false);
-          preferences.putBool("has_pending", true);
-          preferences.putString("ssid_pending", newSsid);
-          preferences.putString("pass_pending", newPass);
-          preferences.end();
-          delay(1000);
-          ESP.restart();
-        }
-      }
-
-      // 1. Update Telemetry Interval
-      if (doc.containsKey("telemetry_interval_minutes")) {
-        int intervalMins = doc["telemetry_interval_minutes"].as<int>();
-        telemetryInterval = (unsigned long)intervalMins * 60 * 1000;
-        Serial.printf("Dynamic Sleep interval set to: %lu ms\n", telemetryInterval);
-      }
-
-      // 2. Fetch safety watchdog timeout limit
-      if (doc.containsKey("pump_safety_timeout_seconds")) {
-        pumpSafetyTimeout = doc["pump_safety_timeout_seconds"].as<unsigned long>();
-        Serial.printf("Safety watchdog maximum timeout set to: %lu seconds\n", pumpSafetyTimeout);
-      }
-
-      // 3. Fetch timezone offset & sync time
-      if (doc.containsKey("timezone_offset_seconds")) {
-        long newOffset = doc["timezone_offset_seconds"].as<long>();
-        if (newOffset != timezoneOffsetSeconds || !timeSynced) {
-          timezoneOffsetSeconds = newOffset;
-          syncTime();
-        }
-      }
-      
-      // 4. Map Dynamic Sensors
-      if (doc.containsKey("sensors")) {
-        JsonArray sensorArr = doc["sensors"].as<JsonArray>();
-        sensorCount = 0;
-        int newDhtPin = -1;
-        
-        for (JsonVariant value : sensorArr) {
-          if (sensorCount >= 10) break;
-          JsonObject sensorObj = value.as<JsonObject>();
-          if (sensorObj.isNull()) continue;
-          
-          sensors[sensorCount].id = sensorObj["id"].as<int>();
-          const char* nameStr = sensorObj["name"].as<const char*>();
-          strncpy(sensors[sensorCount].name, nameStr ? nameStr : "Unnamed Sensor", sizeof(sensors[sensorCount].name) - 1);
-          sensors[sensorCount].name[sizeof(sensors[sensorCount].name) - 1] = '\0';
-          
-          const char* typeStr = sensorObj["type"].as<const char*>();
-          strncpy(sensors[sensorCount].type, typeStr ? typeStr : "unknown", sizeof(sensors[sensorCount].type) - 1);
-          sensors[sensorCount].type[sizeof(sensors[sensorCount].type) - 1] = '\0';
-          
-          sensors[sensorCount].pin = sensorObj["pin"].as<int>();
-          
-          sensors[sensorCount].dryLimit = sensorObj.containsKey("dry_limit") && !sensorObj["dry_limit"].isNull() ? sensorObj["dry_limit"].as<int>() : 3400;
-          sensors[sensorCount].wetLimit = sensorObj.containsKey("wet_limit") && !sensorObj["wet_limit"].isNull() ? sensorObj["wet_limit"].as<int>() : 1100;
-          
-          // Re-init PIN modes
-          if (strcmp(sensors[sensorCount].type, "temperature") == 0 || strcmp(sensors[sensorCount].type, "humidity") == 0) {
-            newDhtPin = sensors[sensorCount].pin;
-          } else if (strcmp(sensors[sensorCount].type, "water_level") == 0) {
-            pin_echo = sensors[sensorCount].pin;
-            pinMode(pin_echo, INPUT);
-            pinMode(pin_trig, OUTPUT);
-          } else {
-            pinMode(sensors[sensorCount].pin, INPUT);
-          }
-          
-          Serial.printf("  -> Mapped Sensor [%d]: %s (Type: %s, Pin: %d)\n", 
-                        sensors[sensorCount].id, sensors[sensorCount].name, sensors[sensorCount].type, sensors[sensorCount].pin);
-          sensorCount++;
-        }
-        
-        // Handle DHT pin changes
-        if (newDhtPin != -1 && newDhtPin != pin_dht) {
-          pin_dht = newDhtPin;
-          if (dht != nullptr) delete dht;
-          dht = new DHT(pin_dht, DHTTYPE);
-          dht->begin();
-          Serial.printf("DHT data pin moved dynamically to pin: %d\n", pin_dht);
-        }
-      }
-      
-      // 5. Map Dynamic Pumps
-      if (doc.containsKey("pumps")) {
-        JsonArray pumpArr = doc["pumps"].as<JsonArray>();
-        pumpCount = 0;
-        
-        for (JsonVariant value : pumpArr) {
-          if (pumpCount >= 10) break;
-          JsonObject pumpObj = value.as<JsonObject>();
-          if (pumpObj.isNull()) continue;
-          
-          pumps[pumpCount].id = pumpObj["id"].as<int>();
-          const char* pNameStr = pumpObj["name"].as<const char*>();
-          strncpy(pumps[pumpCount].name, pNameStr ? pNameStr : "Unnamed Pump", sizeof(pumps[pumpCount].name) - 1);
-          pumps[pumpCount].name[sizeof(pumps[pumpCount].name) - 1] = '\0';
-          
-          pumps[pumpCount].pin = pumpObj["pin"].as<int>();
-          pumps[pumpCount].state = pumpObj.containsKey("state") ? pumpObj["state"].as<int>() : 0;
-          
-          pinMode(pumps[pumpCount].pin, OUTPUT);
-          // Only change physical relay if it is not currently run by a local timer
-          if (!pumps[pumpCount].hasScheduleTimer) {
-            digitalWrite(pumps[pumpCount].pin, pumps[pumpCount].state ? RELAY_ON : RELAY_OFF);
-          }
-          
-          Serial.printf("  -> Mapped Output [%d]: %s (Pin: %d, State: %s)\n", 
-                        pumps[pumpCount].id, pumps[pumpCount].name, pumps[pumpCount].pin, pumps[pumpCount].state ? "ON" : "OFF");
-          pumpCount++;
-        }
-      }
-      
-      // 5b. Map Dynamic Watering Flows
-      if (doc.containsKey("flows")) {
-        JsonArray flowArr = doc["flows"].as<JsonArray>();
-        flowCount = 0;
-        Serial.println("Loading dynamic flows (zones) into local memory...");
-        
-        for (JsonVariant value : flowArr) {
-          if (flowCount >= 10) break;
-          JsonObject flowObj = value.as<JsonObject>();
-          if (flowObj.isNull()) continue;
-          
-          flows[flowCount].id = flowObj["id"].as<int>();
-          const char* fNameStr = flowObj["name"].as<const char*>();
-          strncpy(flows[flowCount].name, fNameStr ? fNameStr : "Unnamed Flow", sizeof(flows[flowCount].name) - 1);
-          flows[flowCount].name[sizeof(flows[flowCount].name) - 1] = '\0';
-          
-          flows[flowCount].pumpId = flowObj["pump_id"].as<int>();
-          
-          JsonArray sensorList = flowObj["sensor_ids"].as<JsonArray>();
-          flows[flowCount].sensorCount = 0;
-          for (JsonVariant sVal : sensorList) {
-            if (flows[flowCount].sensorCount >= 10) break;
-            flows[flowCount].sensorIds[flows[flowCount].sensorCount++] = sVal.as<int>();
-          }
-          
-          Serial.printf("  -> Mapped Flow [%d]: %s (Pump ID: %d, Sensors count: %d)\n",
-                        flows[flowCount].id, flows[flowCount].name, flows[flowCount].pumpId, flows[flowCount].sensorCount);
-          flowCount++;
-        }
-      }
-
-      // 6. Map Offline Local Schedules
-      if (doc.containsKey("schedules")) {
-        JsonArray schedArr = doc["schedules"].as<JsonArray>();
-        scheduleCount = 0;
-        Serial.println("Loading offline schedules into local memory...");
-
-        for (JsonVariant value : schedArr) {
-          if (scheduleCount >= 10) break;
-          JsonObject schedObj = value.as<JsonObject>();
-          if (schedObj.isNull()) continue;
-
-          LocalSchedule& s = schedules[scheduleCount];
-          s.id = schedObj["id"].as<int>();
-          s.durationSeconds = schedObj["duration_seconds"].as<int>();
-
-          // Parse time string e.g. "08:00:00" -> hour: 8, minute: 0
-          const char* timeStr = schedObj["time_of_day"].as<const char*>();
-          int hr = 0, mn = 0;
-          if (timeStr) {
-            sscanf(timeStr, "%d:%d", &hr, &mn);
-          }
-          s.hour = hr;
-          s.minute = mn;
-
-          // Map targeted pump IDs (direct/legacy)
-          s.pumpCount = 0;
-          if (schedObj.containsKey("pump_ids") && !schedObj["pump_ids"].isNull()) {
-            JsonArray pumpsList = schedObj["pump_ids"].as<JsonArray>();
-            for (JsonVariant pVal : pumpsList) {
-              if (s.pumpCount >= 5) break;
-              s.pumpIds[s.pumpCount++] = pVal.as<int>();
-            }
-          }
-
-          // Map targeted flow IDs
-          s.flowCount = 0;
-          if (schedObj.containsKey("flow_ids") && !schedObj["flow_ids"].isNull()) {
-            JsonArray flowsList = schedObj["flow_ids"].as<JsonArray>();
-            for (JsonVariant fVal : flowsList) {
-              if (s.flowCount >= 5) break;
-              s.flowIds[s.flowCount++] = fVal.as<int>();
-            }
-          }
-
-          s.cycles = schedObj.containsKey("cycles") ? schedObj["cycles"].as<int>() : 1;
-          s.soakDurationSeconds = schedObj.containsKey("soak_duration_seconds") ? schedObj["soak_duration_seconds"].as<int>() : 0;
-
-          // Initialize runtime state
-          s.isPulseActive = false;
-          s.isSoaking = false;
-          s.currentCycle = 0;
-          s.lastPhaseTimestamp = 0;
-
-          // Map weekdays
-          JsonArray daysList = schedObj["days_of_week"].as<JsonArray>();
-          s.dayCount = 0;
-          for (JsonVariant dVal : daysList) {
-            if (s.dayCount >= 7) break;
-            s.daysOfWeek[s.dayCount++] = dVal.as<int>();
-          }
-
-          Serial.printf("  -> Schedule [%d] loaded: daily at %02d:%02d for %ds (Pumps: %d, Flows: %d, Cycles: %d, Soak: %ds)\n",
-                        s.id, s.hour, s.minute, s.durationSeconds, s.pumpCount, s.flowCount, s.cycles, s.soakDurationSeconds);
-          scheduleCount++;
-        }
-      }
-      // Save schedules to flash memory after parsing successfully
-      saveSchedulesToFlash();
-    } else {
-      Serial.printf("Server rejected config request: %s\n", doc["error"].as<const char*>());
-    }
+    success = parseConfigPayload(payload);
   } else {
     Serial.printf("HTTP GET dynamic config failed with status: %d\n", httpCode);
   }
   http.end();
+  
+  // Fail-Safe Fallback Connection
+  if (!success && httpCode <= 0 && active_http_server != fallback_http_server) {
+    Serial.println("Attempting fail-safe connection to default fallback server...");
+    snprintf(configUrl, sizeof(configUrl), "%s/api/device/config", fallback_http_server);
+    
+    if (strncmp(fallback_http_server, "https", 5) == 0) {
+      secureClient.setInsecure();
+      http.begin(secureClient, configUrl);
+    } else {
+      http.begin(plainClient, configUrl);
+    }
+    
+    http.addHeader("Authorization", String("Bearer ") + (active_api_token.length() > 0 ? active_api_token : api_access_token));
+    http.addHeader("X-Device-SSID", active_ssid);
+    
+    int fallbackHttpCode = http.GET();
+    if (fallbackHttpCode == HTTP_CODE_OK) {
+      String payload = http.getString();
+      if (parseConfigPayload(payload)) {
+        Serial.println("Successfully recovered connection via fallback server! Saving URL to Flash.");
+        active_http_server = fallback_http_server;
+        preferences.begin("irrigation", false);
+        preferences.putString("http_server", active_http_server);
+        preferences.end();
+      }
+    } else {
+      Serial.printf("Fallback server connection also failed: %d\n", fallbackHttpCode);
+    }
+    http.end();
+  }
 }
 
 // --- Ultrasonic Sensor Read ---
@@ -885,6 +922,27 @@ void startCaptivePortal() {
       font-size: 11px;
       color: var(--text-muted);
     }
+    details.advanced-settings {
+      margin-top: 16px;
+      border-top: 1px solid var(--border);
+      padding-top: 16px;
+      text-align: left;
+    }
+    details.advanced-settings summary {
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 12px;
+      color: var(--text-muted);
+      outline: none;
+      user-select: none;
+      transition: color 0.2s;
+    }
+    details.advanced-settings summary:hover {
+      color: var(--text);
+    }
+    .mt-3 {
+      margin-top: 12px;
+    }
   </style>
   <script>
     function toggleSSIDInput() {
@@ -929,21 +987,31 @@ void startCaptivePortal() {
         <label for="password">Wi-Fi Password</label>
         <input type="password" id="password" name="password" placeholder="Enter Wi-Fi password (optional)">
       </div>
-      <div class="form-group">
-        <label for="server_url">Next.js Server API URL</label>
-        <input type="text" id="server_url" name="server_url" required value="#SERVER_URL#">
-      </div>
+      
+      <details class="advanced-settings">
+        <summary>⚙️ Advanced Developer Settings</summary>
+        <div class="form-group mt-3">
+          <label for="server_url">Next.js Server API URL</label>
+          <input type="text" id="server_url" name="server_url" required value="#SERVER_URL#">
+        </div>
+        <div class="form-group">
+          <label for="api_token">Device API Access Token</label>
+          <input type="text" id="api_token" name="api_token" placeholder="Optional developer token" value="#API_TOKEN#">
+        </div>
+      </details>
+      
       <button type="submit">Save & Restart Device</button>
     </form>
     <div class="footer">
       Device will continue offline if setup is idle for 5 minutes.
     </div>
   </div>
-</body>
+ </body>
 </html>
 )HTML";
     html.replace("#SSID_OPTIONS#", ssidOptions);
     html.replace("#SERVER_URL#", active_http_server);
+    html.replace("#API_TOKEN#", active_api_token.length() > 0 ? active_api_token : api_access_token);
     server.send(200, "text/html", html);
   });
   
@@ -953,6 +1021,7 @@ void startCaptivePortal() {
     String manualSsid = server.arg("manual_ssid");
     String password = server.arg("password");
     String serverUrl = server.arg("server_url");
+    String apiToken = server.arg("api_token");
     
     Serial.println("Captive Portal: Received provisioning request.");
     
@@ -965,6 +1034,7 @@ void startCaptivePortal() {
       preferences.putString("wifi_ssid", ssid);
       preferences.putString("wifi_pass", password);
       preferences.putString("http_server", serverUrl);
+      preferences.putString("api_token", apiToken);
       preferences.putBool("has_pending", false);
       preferences.end();
       
@@ -1120,6 +1190,7 @@ void setup() {
   if (active_http_server.length() == 0) {
     active_http_server = fallback_http_server;
   }
+  active_api_token = preferences.getString("api_token", "");
   Serial.printf("Active HTTP Server: %s\n", active_http_server.c_str());
   preferences.end();
 

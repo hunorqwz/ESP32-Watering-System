@@ -62,6 +62,14 @@ export default function Dashboard({ apiToken }) {
     isConfigOpenRef.current = val;
   };
   const [configTab, setConfigTab] = useState('network'); // 'network', 'sensors', 'pumps', 'general', 'schedules'
+  
+  // Refs for focusing inputs from SVG diagram click events
+  const heightInputRef = useRef(null);
+  const offsetInputRef = useRef(null);
+  const widthInputRef = useRef(null);
+  const lengthInputRef = useRef(null);
+  const volumeInputRef = useRef(null);
+  const minVolumeInputRef = useRef(null);
  
   // Forms
   const [wifiSsid, setWifiSsid] = useState('');
@@ -576,7 +584,11 @@ export default function Dashboard({ apiToken }) {
       const allSuccess = jsonResults.every(r => r.success);
 
       if (allSuccess) {
-        showToast('WiFi settings updated successfully.', 'success');
+        if (deviceStatus.active) {
+          showToast('WiFi settings updated successfully.', 'success');
+        } else {
+          showToast('WiFi settings saved, but the device is offline. They will apply once it reconnects.', 'warning');
+        }
         await fetchDashboardData();
       } else {
         showToast('Failed to save some WiFi configuration parameters.', 'error');
@@ -613,7 +625,11 @@ export default function Dashboard({ apiToken }) {
         const json = await res.json();
         if (json.success) {
           setDeviceStatus(prev => ({ ...prev, interval_minutes: totalMinutes }));
-          showToast(`Telemetry update rate set to ${customInterval} ${intervalUnit}.`, 'success');
+          if (deviceStatus.active) {
+            showToast(`Telemetry update rate set to ${customInterval} ${intervalUnit}.`, 'success');
+          } else {
+            showToast(`Telemetry rate saved, but the device is offline. It will sync once it reconnects.`, 'warning');
+          }
           await fetchDashboardData();
         } else {
           showToast(json.error || 'Failed to update telemetry rate.', 'error');
@@ -755,7 +771,11 @@ export default function Dashboard({ apiToken }) {
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
-          showToast(`System timezone updated to ${timezone}.`, 'success');
+          if (deviceStatus.active) {
+            showToast(`System timezone updated to ${timezone}.`, 'success');
+          } else {
+            showToast(`Timezone saved, but the device is offline. It will sync once it reconnects.`, 'warning');
+          }
           await fetchDashboardData();
         } else {
           showToast(json.error || 'Failed to update timezone.', 'error');
@@ -782,7 +802,12 @@ export default function Dashboard({ apiToken }) {
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
-          showToast(`Moisture skip threshold updated to ${moistureSkipThreshold === 100 ? 'Disabled' : moistureSkipThreshold + '%'}.`, 'success');
+          const skipLabel = moistureSkipThreshold === 100 ? 'Disabled' : moistureSkipThreshold + '%';
+          if (deviceStatus.active) {
+            showToast(`Moisture skip threshold updated to ${skipLabel}.`, 'success');
+          } else {
+            showToast(`Moisture skip threshold saved, but the device is offline. It will sync once it reconnects.`, 'warning');
+          }
           await fetchDashboardData();
         } else {
           showToast(json.error || 'Failed to update threshold.', 'error');
@@ -813,7 +838,11 @@ export default function Dashboard({ apiToken }) {
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
-          showToast(`Pump safety timeout updated to ${pumpSafetyTimeout} seconds.`, 'success');
+          if (deviceStatus.active) {
+            showToast(`Pump safety timeout updated to ${pumpSafetyTimeout} seconds.`, 'success');
+          } else {
+            showToast(`Pump safety timeout saved, but the device is offline. It will sync once it reconnects.`, 'warning');
+          }
           await fetchDashboardData();
         } else {
           showToast(json.error || 'Failed to update safety timeout.', 'error');
@@ -902,7 +931,11 @@ export default function Dashboard({ apiToken }) {
       const allSuccess = jsonResults.every(r => r.success);
 
       if (allSuccess) {
-        showToast('Reservoir configurations updated successfully.', 'success');
+        if (deviceStatus.active) {
+          showToast('Reservoir configurations updated successfully.', 'success');
+        } else {
+          showToast('Reservoir configurations saved, but the device is offline. They will sync once it reconnects.', 'warning');
+        }
         await fetchDashboardData();
       } else {
         showToast('Failed to save some reservoir config parameters.', 'error');
@@ -2420,6 +2453,9 @@ export default function Dashboard({ apiToken }) {
                           Save Timezone
                         </button>
                       </div>
+                      {!deviceStatus.active && (
+                        <span className="text-[10px] text-amber-500 font-semibold mt-1.5 block">⚠️ Offline: Saved changes are pending sync</span>
+                      )}
                     </div>
 
                     {/* City Location Weather search Card */}
@@ -2500,6 +2536,7 @@ export default function Dashboard({ apiToken }) {
                             <div>
                               <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Depth / Height (cm)</label>
                               <input
+                                ref={heightInputRef}
                                 type="number"
                                 min="1"
                                 value={reservoirHeight}
@@ -2514,6 +2551,7 @@ export default function Dashboard({ apiToken }) {
                             <div>
                               <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Sensor Mounting Offset (cm)</label>
                               <input
+                                ref={offsetInputRef}
                                 type="number"
                                 min="1"
                                 value={reservoirSensorOffset}
@@ -2562,6 +2600,7 @@ export default function Dashboard({ apiToken }) {
                                 <div>
                                   <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Width (cm)</label>
                                   <input
+                                    ref={widthInputRef}
                                     type="number"
                                     min="1"
                                     value={reservoirWidth}
@@ -2576,6 +2615,7 @@ export default function Dashboard({ apiToken }) {
                                 <div>
                                   <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Length (cm)</label>
                                   <input
+                                    ref={lengthInputRef}
                                     type="number"
                                     min="1"
                                     value={reservoirLength}
@@ -2596,6 +2636,7 @@ export default function Dashboard({ apiToken }) {
                             <div className="animate-in fade-in duration-200">
                               <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Total Volume Capacity (Liters)</label>
                               <input
+                                ref={volumeInputRef}
                                 type="number"
                                 min="1"
                                 value={reservoirTotalVolume}
@@ -2609,6 +2650,7 @@ export default function Dashboard({ apiToken }) {
                           <div className="pt-2 border-t border-zinc-100">
                             <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Minimum Safety Volume (Liters)</label>
                             <input
+                              ref={minVolumeInputRef}
                               type="number"
                               step="0.5"
                               min="0.5"
@@ -2633,154 +2675,189 @@ export default function Dashboard({ apiToken }) {
                         >
                           Save Reservoir Settings
                         </button>
+                        {!deviceStatus.active && (
+                          <span className="text-[10px] text-amber-500 font-semibold mt-2 block">⚠️ Offline: Saved changes are pending sync</span>
+                        )}
                       </div>
 
                       {/* Right: SVG Diagram (cols 2) */}
-                      <div className="md:col-span-2 flex flex-col items-center justify-center bg-zinc-50/50 border border-zinc-100 rounded-xl p-4 shadow-inner">
-                        <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">Visual Calibration Guide</span>
+                      {(() => {
+                        // Proportional SVG Calculations
+                        const sensorY = 50;
+                        const bottomY = 280;
+                        const maxOffsetCm = Math.max(reservoirSensorOffset, 1);
+                        const scale = 230 / maxOffsetCm; // scale pixels per cm
                         
-                        <svg viewBox="0 0 260 320" className="w-full max-w-[240px] mx-auto select-none">
-                          <defs>
-                            <linearGradient id="waterGrad" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.45" />
-                              <stop offset="100%" stopColor="#1d4ed8" stopOpacity="0.65" />
-                            </linearGradient>
-                            <filter id="glowBlue" x="-20%" y="-20%" width="140%" height="140%">
-                              <feGaussianBlur stdDeviation="3" result="blur" />
-                              <feMerge>
-                                <feMergeNode in="blur" />
-                                <feMergeNode in="SourceGraphic" />
-                              </feMerge>
-                            </filter>
-                          </defs>
+                        // Calculate top of tank (H_tank)
+                        const tankHeightCm = Math.max(reservoirHeight, 1);
+                        const tankHeightSvg = Math.min(tankHeightCm * scale, 210); // cap to prevent overlapping sensor
+                        const topY = bottomY - tankHeightSvg;
+                        
+                        // Calculate safety volume height
+                        const totalVolumeLiters = reservoirUseDimensions
+                          ? (reservoirWidth * reservoirLength * reservoirHeight) / 1000
+                          : Math.max(reservoirTotalVolume, 1);
+                        
+                        const safetyRatio = Math.min(reservoirMinVolume / Math.max(totalVolumeLiters, 1), 1.0);
+                        const safetyHeightSvg = tankHeightSvg * safetyRatio;
+                        const safetyY = bottomY - safetyHeightSvg;
 
-                          {/* Ground Line */}
-                          <line x1="10" y1="280" x2="250" y2="280" stroke="#e4e4e7" strokeWidth="2" strokeDasharray="4 4" />
+                        // Calculate current water level representation (e.g. 65% full for demonstration)
+                        const waterHeightSvg = tankHeightSvg * 0.65;
+                        const waterY = bottomY - waterHeightSvg;
 
-                          {/* Tank Outline */}
-                          <path d="M 50 140 L 50 280 L 170 280 L 170 140" fill="none" stroke="#71717a" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-                          <line x1="45" y1="140" x2="55" y2="140" stroke="#71717a" strokeWidth="3" />
-                          <line x1="165" y1="140" x2="175" y2="140" stroke="#71717a" strokeWidth="3" />
+                        return (
+                          <div className="md:col-span-2 flex flex-col items-center justify-center bg-zinc-50/50 border border-zinc-100 rounded-xl p-4 shadow-inner">
+                            <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">Visual Calibration Guide</span>
+                            
+                            <svg viewBox="0 0 260 320" className="w-full max-w-[240px] mx-auto select-none">
+                              <defs>
+                                <linearGradient id="waterGrad" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.45" />
+                                  <stop offset="100%" stopColor="#1d4ed8" stopOpacity="0.65" />
+                                </linearGradient>
+                                <filter id="glowBlue" filterUnits="userSpaceOnUse" x="0" y="0" width="260" height="320">
+                                  <feGaussianBlur stdDeviation="3" result="blur" />
+                                  <feMerge>
+                                    <feMergeNode in="blur" />
+                                    <feMergeNode in="SourceGraphic" />
+                                  </feMerge>
+                                </filter>
+                              </defs>
 
-                          {/* Water Level representation */}
-                          <rect x="52" y="190" width="116" height="88" fill="url(#waterGrad)" rx="2" />
-                          <path d="M 52 190 Q 80 188 110 190 T 168 190" fill="none" stroke="#2563eb" strokeWidth="2" />
+                              {/* Ground Line */}
+                              <line x1="10" y1="280" x2="250" y2="280" stroke="#e4e4e7" strokeWidth="2" strokeDasharray="4 4" />
 
-                          {/* Sensor representation */}
-                          <path d="M 110 30 L 110 50" fill="none" stroke="#71717a" strokeWidth="2" />
-                          <rect x="90" y="30" width="40" height="4" fill="#a1a1aa" rx="1" />
-                          <rect x="95" y="46" width="30" height="12" fill="#3f3f46" rx="2" />
-                          <circle cx="102" cy="58" r="4" fill="#18181b" />
-                          <circle cx="118" cy="58" r="4" fill="#18181b" />
-                          
-                          {/* Acoustic waves */}
-                          <path d="M 100 68 Q 110 74 120 68" fill="none" stroke="#a1a1aa" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
-                          <path d="M 96 74 Q 110 82 124 74" fill="none" stroke="#a1a1aa" strokeWidth="1.5" strokeLinecap="round" opacity="0.4" />
+                              {/* Tank Outline */}
+                              <path d={`M 50 ${topY} L 50 280 L 170 280 L 170 ${topY}`} fill="none" stroke="#71717a" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                              <line x1="42" y1={topY} x2="58" y2={topY} stroke="#71717a" strokeWidth="3" />
+                              <line x1="162" y1={topY} x2="178" y2={topY} stroke="#71717a" strokeWidth="3" />
 
-                          {/* Dimensions lines */}
-                          
-                          {/* 1. Sensor Mounting Offset */}
-                          <g 
-                            className="cursor-pointer"
-                            onMouseEnter={() => setFocusedField('offset')}
-                            onMouseLeave={() => setFocusedField(null)}
-                          >
-                            <line 
-                              x1="210" y1="52" x2="210" y2="280" 
-                              stroke={focusedField === 'offset' ? '#f59e0b' : '#a1a1aa'} 
-                              strokeWidth={focusedField === 'offset' ? '3' : '1.5'}
-                              filter={focusedField === 'offset' ? 'url(#glowBlue)' : ''}
-                            />
-                            <path d="M 206 58 L 210 52 L 214 58" fill="none" stroke={focusedField === 'offset' ? '#f59e0b' : '#a1a1aa'} strokeWidth="1.5" />
-                            <path d="M 206 274 L 210 280 L 214 274" fill="none" stroke={focusedField === 'offset' ? '#f59e0b' : '#a1a1aa'} strokeWidth="1.5" />
-                            <text 
-                              x="220" y="160" 
-                              fill={focusedField === 'offset' ? '#d97706' : '#71717a'} 
-                              fontSize="9" 
-                              fontWeight={focusedField === 'offset' ? 'bold' : 'normal'}
-                              transform="rotate(90, 220, 160)"
-                              textAnchor="middle"
-                            >
-                              Sensor Offset ({reservoirSensorOffset} cm)
-                            </text>
-                          </g>
+                              {/* Water Level representation */}
+                              <rect x="52" y={waterY} width="116" height={waterHeightSvg - 2} fill="url(#waterGrad)" rx="2" />
+                              <path d={`M 52 ${waterY} Q 80 ${waterY - 2} 110 ${waterY} T 168 ${waterY}`} fill="none" stroke="#2563eb" strokeWidth="2" />
 
-                          {/* 2. Tank Height */}
-                          <g 
-                            className="cursor-pointer"
-                            onMouseEnter={() => setFocusedField('height')}
-                            onMouseLeave={() => setFocusedField(null)}
-                          >
-                            <line 
-                              x1="24" y1="140" x2="24" y2="280" 
-                              stroke={focusedField === 'height' ? '#3b82f6' : '#a1a1aa'} 
-                              strokeWidth={focusedField === 'height' ? '3' : '1.5'}
-                              filter={focusedField === 'height' ? 'url(#glowBlue)' : ''}
-                            />
-                            <path d="M 20 146 L 24 140 L 28 146" fill="none" stroke={focusedField === 'height' ? '#3b82f6' : '#a1a1aa'} strokeWidth="1.5" />
-                            <path d="M 20 274 L 24 280 L 28 274" fill="none" stroke={focusedField === 'height' ? '#3b82f6' : '#a1a1aa'} strokeWidth="1.5" />
-                            <text 
-                              x="14" y="210" 
-                              fill={focusedField === 'height' ? '#2563eb' : '#71717a'} 
-                              fontSize="9" 
-                              fontWeight={focusedField === 'height' ? 'bold' : 'normal'}
-                              transform="rotate(-90, 14, 210)"
-                              textAnchor="middle"
-                            >
-                              Tank Depth ({reservoirHeight} cm)
-                            </text>
-                          </g>
+                              {/* Sensor representation */}
+                              <path d={`M 110 20 L 110 ${sensorY}`} fill="none" stroke="#71717a" strokeWidth="2" />
+                              <rect x="90" y="20" width="40" height="4" fill="#a1a1aa" rx="1" />
+                              <rect x="95" y={sensorY - 4} width="30" height="12" fill="#3f3f46" rx="2" />
+                              <circle cx="102" cy={sensorY + 6} r="4" fill="#18181b" />
+                              <circle cx="118" cy={sensorY + 6} r="4" fill="#18181b" />
+                              
+                              {/* Acoustic waves */}
+                              <path d={`M 100 ${sensorY + 14} Q 110 ${sensorY + 18} 120 ${sensorY + 14}`} fill="none" stroke="#a1a1aa" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
+                              <path d={`M 96 ${sensorY + 20} Q 110 ${sensorY + 26} 124 ${sensorY + 20}`} fill="none" stroke="#a1a1aa" strokeWidth="1.5" strokeLinecap="round" opacity="0.4" />
 
-                          {/* 3. Safety Minimum Limit */}
-                          <g
-                            className="cursor-pointer"
-                            onMouseEnter={() => setFocusedField('min_volume')}
-                            onMouseLeave={() => setFocusedField(null)}
-                          >
-                            <line 
-                              x1="52" y1="240" x2="168" y2="240" 
-                              stroke="#ef4444" 
-                              strokeWidth={focusedField === 'min_volume' ? '2.5' : '1.5'}
-                              strokeDasharray="3 2"
-                            />
-                            <text 
-                              x="110" y="234" 
-                              fill="#ef4444" 
-                              fontSize="8" 
-                              fontWeight="bold"
-                              textAnchor="middle"
-                            >
-                              Min Safety ({reservoirMinVolume}L)
-                            </text>
-                          </g>
-
-                          {/* 4. Tank Width */}
-                          {reservoirUseDimensions && (
-                            <g
-                              className="cursor-pointer"
-                              onMouseEnter={() => setFocusedField('width')}
-                              onMouseLeave={() => setFocusedField(null)}
-                            >
-                              <line 
-                                x1="50" y1="294" x2="170" y2="294" 
-                                stroke={focusedField === 'width' ? '#3b82f6' : '#d4d4d8'} 
-                                strokeWidth={focusedField === 'width' ? '2' : '1'}
-                              />
-                              <path d="M 56 290 L 50 294 L 56 298" fill="none" stroke={focusedField === 'width' ? '#3b82f6' : '#d4d4d8'} strokeWidth="1" />
-                              <path d="M 164 290 L 170 294 L 164 298" fill="none" stroke={focusedField === 'width' ? '#3b82f6' : '#d4d4d8'} strokeWidth="1" />
-                              <text 
-                                x="110" y="306" 
-                                fill={focusedField === 'width' ? '#2563eb' : '#a1a1aa'} 
-                                fontSize="8"
-                                fontWeight={focusedField === 'width' ? 'bold' : 'normal'}
-                                textAnchor="middle"
+                              {/* Dimensions lines */}
+                              
+                              {/* 1. Sensor Mounting Offset */}
+                              <g 
+                                className="cursor-pointer"
+                                onMouseEnter={() => setFocusedField('offset')}
+                                onMouseLeave={() => setFocusedField(null)}
+                                onClick={() => offsetInputRef.current?.focus()}
                               >
-                                Width ({reservoirWidth} cm)
-                              </text>
-                            </g>
-                          )}
-                        </svg>
-                      </div>
+                                <line 
+                                  x1="210" y1={sensorY} x2="210" y2="280" 
+                                  stroke={focusedField === 'offset' ? '#f59e0b' : '#a1a1aa'} 
+                                  strokeWidth={focusedField === 'offset' ? '3' : '1.5'}
+                                  filter={focusedField === 'offset' ? 'url(#glowBlue)' : ''}
+                                />
+                                <path d={`M 206 ${sensorY + 6} L 210 ${sensorY} L 214 ${sensorY + 6}`} fill="none" stroke={focusedField === 'offset' ? '#f59e0b' : '#a1a1aa'} strokeWidth="1.5" />
+                                <path d="M 206 274 L 210 280 L 214 274" fill="none" stroke={focusedField === 'offset' ? '#f59e0b' : '#a1a1aa'} strokeWidth="1.5" />
+                                <text 
+                                  x="220" y="160" 
+                                  fill={focusedField === 'offset' ? '#d97706' : '#71717a'} 
+                                  fontSize="9" 
+                                  fontWeight={focusedField === 'offset' ? 'bold' : 'normal'}
+                                  transform="rotate(90, 220, 160)"
+                                  textAnchor="middle"
+                                >
+                                  Sensor Offset ({reservoirSensorOffset} cm)
+                                </text>
+                              </g>
+
+                              {/* 2. Tank Height */}
+                              <g 
+                                className="cursor-pointer"
+                                onMouseEnter={() => setFocusedField('height')}
+                                onMouseLeave={() => setFocusedField(null)}
+                                onClick={() => heightInputRef.current?.focus()}
+                              >
+                                <line 
+                                  x1="24" y1={topY} x2="24" y2="280" 
+                                  stroke={focusedField === 'height' ? '#3b82f6' : '#a1a1aa'} 
+                                  strokeWidth={focusedField === 'height' ? '3' : '1.5'}
+                                  filter={focusedField === 'height' ? 'url(#glowBlue)' : ''}
+                                />
+                                <path d={`M 20 ${topY + 6} L 24 ${topY} L 28 ${topY + 6}`} fill="none" stroke={focusedField === 'height' ? '#3b82f6' : '#a1a1aa'} strokeWidth="1.5" />
+                                <path d="M 20 274 L 24 280 L 28 274" fill="none" stroke={focusedField === 'height' ? '#3b82f6' : '#a1a1aa'} strokeWidth="1.5" />
+                                <text 
+                                  x="14" y="210" 
+                                  fill={focusedField === 'height' ? '#2563eb' : '#71717a'} 
+                                  fontSize="9" 
+                                  fontWeight={focusedField === 'height' ? 'bold' : 'normal'}
+                                  transform="rotate(-90, 14, 210)"
+                                  textAnchor="middle"
+                                >
+                                  Tank Depth ({reservoirHeight} cm)
+                                </text>
+                              </g>
+
+                              {/* 3. Safety Minimum Limit */}
+                              <g
+                                className="cursor-pointer"
+                                onMouseEnter={() => setFocusedField('min_volume')}
+                                onMouseLeave={() => setFocusedField(null)}
+                                onClick={() => minVolumeInputRef.current?.focus()}
+                              >
+                                <line 
+                                  x1="52" y1={safetyY} x2="168" y2={safetyY} 
+                                  stroke="#ef4444" 
+                                  strokeWidth={focusedField === 'min_volume' ? '2.5' : '1.5'}
+                                  strokeDasharray="3 2"
+                                />
+                                <text 
+                                  x="110" y={safetyY - 6} 
+                                  fill="#ef4444" 
+                                  fontSize="8" 
+                                  fontWeight="bold"
+                                  textAnchor="middle"
+                                >
+                                  Min Safety ({reservoirMinVolume}L)
+                                </text>
+                              </g>
+
+                              {/* 4. Tank Width */}
+                              {reservoirUseDimensions && (
+                                <g
+                                  className="cursor-pointer"
+                                  onMouseEnter={() => setFocusedField('width')}
+                                  onMouseLeave={() => setFocusedField(null)}
+                                  onClick={() => widthInputRef.current?.focus()}
+                                >
+                                  <line 
+                                    x1="50" y1="294" x2="170" y2="294" 
+                                    stroke={focusedField === 'width' ? '#3b82f6' : '#d4d4d8'} 
+                                    strokeWidth={focusedField === 'width' ? '2' : '1'}
+                                  />
+                                  <path d="M 56 290 L 50 294 L 56 298" fill="none" stroke={focusedField === 'width' ? '#3b82f6' : '#d4d4d8'} strokeWidth="1" />
+                                  <path d="M 164 290 L 170 294 L 164 298" fill="none" stroke={focusedField === 'width' ? '#3b82f6' : '#d4d4d8'} strokeWidth="1" />
+                                  <text 
+                                    x="110" y="306" 
+                                    fill={focusedField === 'width' ? '#2563eb' : '#a1a1aa'} 
+                                    fontSize="8"
+                                    fontWeight={focusedField === 'width' ? 'bold' : 'normal'}
+                                    textAnchor="middle"
+                                  >
+                                    Width ({reservoirWidth} cm)
+                                  </text>
+                                </g>
+                              )}
+                            </svg>
+                          </div>
+                        );
+                      })()}
 
                     </div>
                   </div>
@@ -2825,6 +2902,9 @@ export default function Dashboard({ apiToken }) {
                           Save Interval
                         </button>
                       </div>
+                      {!deviceStatus.active && (
+                        <span className="text-[10px] text-amber-500 font-semibold mt-1.5 block">⚠️ Offline: Saved changes are pending sync</span>
+                      )}
                     </div>
 
                     {/* Moisture skip trigger Card */}
@@ -2862,6 +2942,9 @@ export default function Dashboard({ apiToken }) {
                             Save Threshold
                           </button>
                         </div>
+                        {!deviceStatus.active && (
+                          <span className="text-[10px] text-amber-500 font-semibold mt-1.5 block">⚠️ Offline: Saved changes are pending sync</span>
+                        )}
                       </div>
                     </div>
 
@@ -2900,6 +2983,9 @@ export default function Dashboard({ apiToken }) {
                             Save Timeout
                           </button>
                         </div>
+                        {!deviceStatus.active && (
+                          <span className="text-[10px] text-amber-500 font-semibold mt-1.5 block">⚠️ Offline: Saved changes are pending sync</span>
+                        )}
                       </div>
                     </div>
                   </div>
