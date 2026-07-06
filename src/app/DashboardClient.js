@@ -1963,7 +1963,7 @@ export default function Dashboard({ apiToken }) {
               </div>
 
               {/* Tab Content Area */}
-              <div className="flex-1 p-6 overflow-y-auto space-y-6">
+              <div className="flex-1 p-5 overflow-y-auto space-y-4">
                 
                 {/* 1. NETWORK SETTINGS TAB */}
                 {configTab === 'network' && (
@@ -2524,14 +2524,14 @@ export default function Dashboard({ apiToken }) {
 
                 {/* 5. RESERVOIR SETTINGS TAB */}
                 {configTab === 'reservoir' && (
-                  <div className="space-y-6">
-                    <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wider border-b pb-1.5">Water Reservoir Calibration</h4>
+                  <div className="space-y-4">
+                    <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wider border-b pb-1">Water Reservoir Calibration</h4>
                     
-                    <div className="grid grid-cols-1 md:grid-cols-5 gap-6 items-start">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
                       
-                      {/* Left: Input fields form (cols 3) */}
-                      <div className="md:col-span-3 space-y-4">
-                        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-4">
+                      {/* Left: Input fields form (cols 1) */}
+                      <div className="space-y-3">
+                        <div className="bg-white border border-zinc-200 rounded-xl p-4 shadow-sm space-y-3">
                           <div className="grid grid-cols-2 gap-4">
                             <div>
                               <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Tank Depth / Height (cm)</label>
@@ -2628,8 +2628,8 @@ export default function Dashboard({ apiToken }) {
                                   />
                                 </div>
                               </div>
-                              <div className="bg-zinc-50 border border-zinc-200 p-2.5 rounded-lg text-center font-semibold text-zinc-600 text-xs">
-                                Estimated Tank Volume: <span className="text-zinc-900 font-mono">{(Math.round((reservoirWidth * reservoirLength * reservoirHeight) / 100) / 10).toFixed(1)}L</span>
+                              <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider pl-1 mt-1">
+                                Calculated Capacity: <span className="text-zinc-900 font-mono text-xs font-bold">{(Math.round((reservoirWidth * reservoirLength * reservoirHeight) / 100) / 10).toFixed(1)}L</span>
                               </div>
                             </div>
                           ) : (
@@ -2707,10 +2707,10 @@ export default function Dashboard({ apiToken }) {
                         const waterY = bottomY - waterHeightSvg;
 
                         return (
-                          <div className="md:col-span-2 flex flex-col items-center justify-center bg-zinc-50/50 border border-zinc-100 rounded-xl p-4 shadow-inner">
-                            <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">Visual Calibration Guide</span>
+                          <div className="flex flex-col items-center justify-center bg-zinc-50/50 border border-zinc-100 rounded-xl p-3 shadow-inner">
+                            <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">Visual Calibration Guide</span>
                             
-                            <svg viewBox="0 0 260 320" className="w-full max-w-[240px] mx-auto select-none">
+                            <svg viewBox="0 0 260 320" className="w-full max-w-[280px] mx-auto select-none">
                               <defs>
                                 <linearGradient id="waterGrad" x1="0" y1="0" x2="0" y2="1">
                                   <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.45" />
