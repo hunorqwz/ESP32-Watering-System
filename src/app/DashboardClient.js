@@ -55,7 +55,12 @@ export default function Dashboard({ apiToken }) {
   const [isNotesOpen, setIsNotesOpen] = useState(false);
  
   // Configuration Manager Modal States
-  const [isConfigOpen, setIsConfigOpen] = useState(false);
+  const [isConfigOpen, _setIsConfigOpen] = useState(false);
+  const isConfigOpenRef = useRef(false);
+  const setIsConfigOpen = (val) => {
+    _setIsConfigOpen(val);
+    isConfigOpenRef.current = val;
+  };
   const [configTab, setConfigTab] = useState('network'); // 'network', 'sensors', 'pumps', 'general', 'schedules'
  
   // Forms
@@ -173,7 +178,7 @@ export default function Dashboard({ apiToken }) {
           if (json.device_status) {
             setDeviceStatus(json.device_status);
           }
-          if (json.configs) {
+          if (json.configs && !isConfigOpenRef.current) {
             setWifiSsid(json.configs['wifi_ssid'] || '');
             setWifiPassword(json.configs['wifi_password'] || '');
             setReservoirUseDimensions(json.configs['reservoir_use_dimensions'] === 'true');
